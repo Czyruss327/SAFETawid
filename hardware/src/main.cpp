@@ -1,12 +1,13 @@
 #include <Arduino.h>
 #include <HTTPClient.h>
+#include <Preferences.h>
+#include <WebServer.h>
 #include <WiFi.h>
 
 namespace {
-// Edit these values here, then build and upload the firmware again.
-constexpr char WIFI_SSID[] = "hshs";
-constexpr char WIFI_PASSWORD[] = "123456789";
-constexpr char BACKEND_API_URL[] = "http://10.53.71.204:8000";
+constexpr char CONFIG_AP_PREFIX[] = "SAFETawid-Setup-";
+constexpr char CONFIG_PASSWORD_PREFIX[] = "SZ-";
+constexpr uint8_t CONFIG_BUTTON_PIN = 0;  // Hold the board's BOOT button for 3 seconds to reconfigure.
 
 constexpr uint8_t READY_LED_PIN = 17;
 constexpr uint8_t ALERT_LED_PIN = 18;
@@ -29,11 +30,19 @@ bool outputOn = false;
 bool wasConnected = false;
 bool backendReachable = false;
 bool wifiAttemptInProgress = false;
+bool configPortalActive = false;
 int lastBackendFailureStatus = 0;
 uint32_t alertStartedAt = 0;
 uint32_t lastOutputStepAt = 0;
 uint32_t lastBackendPollAt = 0;
 uint32_t lastWiFiAttemptAt = 0;
+uint32_t configButtonPressedAt = 0;
+String wifiSsid;
+String wifiPassword;
+String backendApiUrl;
+String configApPassword;
+Preferences preferences;
+WebServer configServer(80);
 
 void setBuzzer(bool enabled) {
   const uint32_t duty = enabled
@@ -43,7 +52,60 @@ void setBuzzer(bool enabled) {
 }
 
 String apiUrl(const char *path) {
-  return String(BACKEND_API_URL) + path;
+  return backendApiUrl + path;
+}
+
+void startConfigPortal() {
+  if (configPortalActive) return;
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.setSleep(false);
+  const String suffix = WiFi.macAddress().substring(9, 17);
+  const String apName = String(CONFIG_AP_PREFIX) + suffix;
+  configApPassword = String(CONFIG_PASSWORD_PREFIX) + suffix;
+  if (!WiFi.softAP(apName.c_str(), configApPassword.c_str())) {
+    Serial.println("Could not start the Wi-Fi setup network.");
+    return;
+  }
+  configServer.on("/", HTTP_GET, []() {
+    const String html = F("<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>SAFETawid setup</title><style>body{font:16px system-ui;max-width:480px;margin:40px auto;padding:0 18px}input{box-sizing:border-box;width:100%;padding:10px;margin:6px 0 16px}button{padding:12px 18px;background:#087a59;color:white;border:0;border-radius:6px}</style></head><body><h1>SAFETawid hardware setup</h1><p>Enter the Wi-Fi network used by the computer running the dashboard, and that computer's local API address.</p><form method='post' action='/save'><label>Wi-Fi name</label><input name='ssid' required maxlength='32'><label>Wi-Fi password</label><input name='password' type='password' maxlength='64'><label>Computer API address</label><input name='backend' value='http://192.168.1.10:8000' required><button type='submit'>Save and connect</button></form></body></html>");
+    configServer.send(200, "text/html; charset=utf-8", html);
+  });
+  configServer.on("/save", HTTP_POST, []() {
+    String ssid = configServer.arg("ssid");
+    String password = configServer.arg("password");
+    String backend = configServer.arg("backend");
+    backend.trim();
+    while (backend.endsWith("/")) backend.remove(backend.length() - 1);
+    if (ssid.isEmpty() || !(backend.startsWith("http://") || backend.startsWith("https://"))) {
+      configServer.send(400, "text/plain; charset=utf-8", "Enter a Wi-Fi name and an API address beginning with http:// or https://.");
+      return;
+    }
+    preferences.begin("safetawid", false);
+    preferences.putString("ssid", ssid);
+    preferences.putString("password", password);
+    preferences.putString("backend", backend);
+    preferences.end();
+    configServer.send(200, "text/html; charset=utf-8", "<!doctype html><meta name='viewport' content='width=device-width'><h2>Settings saved</h2><p>The device is restarting and will connect to Wi-Fi.</p>");
+    delay(1200);
+    ESP.restart();
+  });
+  configServer.onNotFound([]() { configServer.sendHeader("Location", "/"); configServer.send(302, "text/plain", ""); });
+  configServer.begin();
+  configPortalActive = true;
+  Serial.printf("Setup Wi-Fi: %s\nSetup password: %s\nOpen: http://192.168.4.1\n", apName.c_str(), configApPassword.c_str());
+}
+
+void handleConfigButton() {
+  if (digitalRead(CONFIG_BUTTON_PIN) == LOW) {
+    if (configButtonPressedAt == 0) configButtonPressedAt = millis();
+    else if (millis() - configButtonPressedAt >= 3000) {
+      configButtonPressedAt = UINT32_MAX;
+      Serial.println("Starting Wi-Fi setup portal.");
+      startConfigPortal();
+    }
+  } else {
+    configButtonPressedAt = 0;
+  }
 }
 
 void logWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
@@ -59,8 +121,8 @@ void logWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
 void connectWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
-  Serial.printf("Connecting to Wi-Fi: %s\n", WIFI_SSID);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.printf("Connecting to Wi-Fi: %s\n", wifiSsid.c_str());
+  WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
   lastWiFiAttemptAt = millis();
   wifiAttemptInProgress = true;
 }
@@ -115,7 +177,7 @@ void pollBackend() {
   } else if (status < 0) {
     backendReachable = false;
     if (lastBackendFailureStatus != status) {
-      Serial.printf("Backend poll failed for %s: %s\n", BACKEND_API_URL,
+      Serial.printf("Backend poll failed for %s: %s\n", backendApiUrl.c_str(),
                     http.errorToString(status).c_str());
       lastBackendFailureStatus = status;
     }
@@ -182,6 +244,7 @@ void updateOutputs() {
 
 void setup() {
   Serial.begin(115200);
+  pinMode(CONFIG_BUTTON_PIN, INPUT_PULLUP);
   pinMode(READY_LED_PIN, OUTPUT);
   pinMode(ALERT_LED_PIN, OUTPUT);
   if (!ledcAttach(BUZZER_PIN, BUZZER_TONE_HZ, BUZZER_PWM_BITS)) {
@@ -191,11 +254,23 @@ void setup() {
   digitalWrite(ALERT_LED_PIN, LOW);
   setBuzzer(false);
   WiFi.onEvent(logWiFiEvent);
-  Serial.printf("Backend alert controller starting: %s\n", BACKEND_API_URL);
-  connectWiFi();
+  preferences.begin("safetawid", true);
+  wifiSsid = preferences.getString("ssid", "");
+  wifiPassword = preferences.getString("password", "");
+  backendApiUrl = preferences.getString("backend", "");
+  preferences.end();
+  Serial.println("SAFETawid hardware alert controller starting.");
+  if (wifiSsid.isEmpty() || backendApiUrl.isEmpty()) startConfigPortal();
+  else connectWiFi();
 }
 
 void loop() {
+  if (configPortalActive) {
+    configServer.handleClient();
+    delay(5);
+    return;
+  }
+  handleConfigButton();
   maintainWiFi();
   pollBackend();
   updateOutputs();

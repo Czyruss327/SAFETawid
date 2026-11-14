@@ -24,15 +24,15 @@ To delete local records, quit the app, then remove `school_zone.db`, `school_zon
 
 The app creates `desktop-config.json` under the local data folder on first launch:
 
-- `allowEsp32LanAccess`: defaults to `false`; the API listens only on loopback. Set to `true` only on the designated trusted school LAN when the ESP32 needs to connect. The OS firewall may need a narrow local-network rule. Configure the firmware backend URL to the host's reserved LAN IP and the API port shown in the backend startup output. Do not forward that port from the router or expose it through a public tunnel.
-- `apiPort`: defaults to `8000`; keep this aligned with the ESP32 firmware URL.
-- `hardwareAlertsEnabled`: defaults to `false`; set to `true` only when the ESP32 is configured and the approved deployment calls for physical alerts.
+- `allowEsp32LanAccess`: defaults to `false`; set to `true` on the designated trusted school LAN when the ESP32 needs to connect. The OS firewall may need a narrow local-network rule. The startup output shows the API port; enter the computer's reserved LAN IP and that port in the ESP32 setup page. Do not forward that port from the router or expose it through a public tunnel.
+- `apiPort`: defaults to `8000`; the actual selected API port is printed at startup and should be entered in the ESP32 setup page.
+- `hardwareAlertsEnabled`: defaults to `false`; set to `true` when the approved deployment calls for physical alerts.
 - `retentionDays`: set to the UREC-approved data retention period in days; zero means no automatic cleanup.
 - `pythonExecutable`: optional full path to a Python executable if it is not `backend/.venv/Scripts/python.exe`.
 - `model`: local model filename or supported Ultralytics model name.
 - `device`: `auto` (default), `cpu`, or a CUDA device such as `cuda:0`. Use `cpu` to avoid GPU/CUDA runtime problems.
 
-Close and restart the desktop app after changing configuration. Dashboard alert thresholds remain editable in **Dashboard menu → Alert settings**. Hardware access exposes the backend to other devices on the local network and does not add user authentication; use it only on a trusted, access-controlled LAN.
+Close and restart the desktop app after changing configuration. ESP32 Wi-Fi credentials and backend URL are configured through its on-device setup Wi-Fi page, not in firmware source. Dashboard alert thresholds remain editable in **Dashboard menu → Alert settings**. Hardware access exposes the backend to other devices on the local network and does not add user authentication; use it only on a trusted, access-controlled LAN.
 
 ## CUDA setup troubleshooting
 

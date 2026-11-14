@@ -120,9 +120,9 @@ Verify that the API gateway forwards `/api/*` to the on-site FastAPI server, tha
 
 ### 3. Configure the ESP32-S3
 
-For the physical ESP32-S3, follow [the hardware setup guide](hardware/README.md). Configure Wi-Fi credentials, the API address, and GPIO pins in `hardware/src/main.cpp`, then build and upload the firmware. USB-C is used for power, programming, and serial logs; Wi-Fi carries alert API requests.
+For the physical ESP32-S3, follow [the hardware setup guide](hardware/README.md). Configure Wi-Fi credentials and the API address through the ESP32's setup Wi-Fi page; settings are stored on the device and do not require firmware edits. USB-C is used for power, programming, and setup logs; Wi-Fi carries alert API requests.
 
-Keep the API gateway and the backend URL hardcoded in the ESP32 firmware pointed at the same FastAPI instance. If the computer is unavailable, the online dashboard may load but live detection and hardware alerts will not work.
+Set the ESP32's saved backend URL to the computer's private LAN address and the desktop app's API port. If the computer is unavailable, the online dashboard may load but live detection and hardware alerts will not work.
 
 ## Research instrument data
 

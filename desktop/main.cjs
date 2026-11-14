@@ -152,6 +152,7 @@ app.whenReady().then(async () => {
   });
   const bindHost = config.allowEsp32LanAccess ? "0.0.0.0" : "127.0.0.1";
   apiPort = await choosePort(bindHost, Math.max(1024, Math.min(65535, Number(config.apiPort) || 8000)));
+  console.log(`ESP32 API listening on ${bindHost}:${apiPort}`);
   await serveAndProxy();
   startBackend(config);
   createWindow();

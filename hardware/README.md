@@ -17,10 +17,15 @@ The green LED indicates the board can reach the backend. During an alert, green 
 
 ## Configure and run
 
-1. The Wi-Fi name, password, and backend URL are hardcoded near the top of `src/main.cpp`. Update `WIFI_SSID`, `WIFI_PASSWORD`, and `BACKEND_API_URL` there to match your network and computer's stable LAN address on port 8000.
-2. The current pin assignments are green GPIO 17, red GPIO 18, and buzzer GPIO 36. If your wires differ, update `READY_LED_PIN`, `ALERT_LED_PIN`, and `BUZZER_PIN` in the same file.
-3. Build and upload this PlatformIO project again. Any change to these settings requires another upload.
-4. In PowerShell, start FastAPI with hardware alerts enabled:
+Wi-Fi details and the computer API address are saved on the ESP32, outside the firmware source. You only need to upload firmware again if you change the wiring or firmware itself.
+
+1. In the desktop app's local data folder, open `desktop-config.json` and set `allowEsp32LanAccess` and `hardwareAlertsEnabled` to `true`. Keep the computer and ESP32 on the same trusted private Wi-Fi network. Restart the app after changing the file.
+2. Start the desktop app and note the `ESP32 API listening on ...` address in its startup output. Find the computer's private LAN IPv4 address in Windows Network settings. Combine it with the API port, for example `http://192.168.1.20:8000`.
+3. On first power-up, connect a phone or computer to the Wi-Fi network named `SAFETawid-Setup-...`. The setup password and address `http://192.168.4.1` are printed to the USB serial monitor at 115200 baud. Enter the site's Wi-Fi name/password and the computer API address, then save. The ESP32 stores these settings and restarts.
+4. To change saved settings later, hold the ESP32 board's **BOOT** button for 3 seconds while it is running. Connect again to its `SAFETawid-Setup-...` network and submit the updated values. The password is shown in the USB serial monitor.
+5. The green LED turns on after the ESP32 can reach the backend. Start the camera/dashboard; alerts then trigger the red LED and buzzer. USB is still used for power, firmware upload, and setup logs; alert requests continue over Wi-Fi.
+
+If you run FastAPI directly instead of through the desktop app, enable hardware alerts and make it reachable on the trusted LAN:
 
    ```powershell
    cd backend
@@ -28,7 +33,6 @@ The green LED indicates the board can reach the backend. During an alert, green 
    uvicorn main:app --host 0.0.0.0 --port 8000
    ```
 
-5. Open PlatformIO's Serial Monitor at 115200 baud. Look for `Wi-Fi connected` and `Backend API connected.` The disconnect reason code is printed when Wi-Fi drops. Close the monitor before uploading again.
-6. Start the dashboard and camera. When its alert condition triggers, the ESP32 flashes the red LED and sounds the piezo; green turns off. It then acknowledges the alert.
+Check the serial monitor for `Wi-Fi connected` and `Backend API connected.` The disconnect reason code is printed when Wi-Fi drops.
 
 Allow port 8000 through the computer's firewall for the private network. Keep the backend on a trusted local network; do not expose port 8000 directly to the public internet.
