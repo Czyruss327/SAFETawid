@@ -34,6 +34,14 @@ The app creates `desktop-config.json` under the local data folder on first launc
 
 Close and restart the desktop app after changing configuration. Dashboard alert thresholds remain editable in **Dashboard menu → Alert settings**. Hardware access exposes the backend to other devices on the local network and does not add user authentication; use it only on a trusted, access-controlled LAN.
 
+## CUDA setup troubleshooting
+
+An RTX 3050 is CUDA-capable (compute capability 8.6). The first CUDA probe may report that CUDA is unavailable because the initial `requirements.txt` install can bring in a CPU-only PyTorch build; the setup script then installs and probes a GPU-enabled build. The probe now runs a CUDA/cuDNN convolution before reporting success. If neither GPU wheel passes, setup installs CPU PyTorch so the app can still run.
+
+If setup ends with CPU fallback, update the NVIDIA driver and rerun `npm run backend:setup`. CUDA 13.x needs a recent driver (NVIDIA lists 580 or newer for minor-version compatibility); the setup script also tries the CUDA 12.6 wheel for older supported drivers. A separate CUDA Toolkit installation is not required for the PyTorch wheels. See the [PyTorch Windows wheel options](https://pytorch.org/get-started/previous-versions/) and [NVIDIA CUDA driver compatibility table](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html).
+
+If the GPU build still fails, set `device` to `cpu` in `desktop-config.json` to use the app while investigating, and share the final CUDA/cuDNN probe output plus `nvidia-smi` driver version for diagnosis.
+
 ## Packaging
 
 This source project currently expects Node.js and the prepared Python environment on the designated computer. Producing a standalone installer with a bundled Python runtime and compatible PyTorch/CUDA libraries is a separate packaging step; it should be built and verified on the target Windows architecture and GPU environment.
