@@ -1,6 +1,6 @@
 {
-  "allowEsp32LanAccess": false,
-  "hardwareAlertsEnabled": false,
+  "allowEsp32LanAccess": true,
+  "hardwareAlertsEnabled": true,
   "retentionDays": 0,
   "apiPort": 8000,
   "pythonExecutable": "",
