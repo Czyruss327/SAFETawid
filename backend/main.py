@@ -73,9 +73,30 @@ alert_settings = {
     "two_person_dwell_seconds": ALERT_TWO_PERSON_DWELL_SECONDS,
     "three_or_more_dwell_seconds": ALERT_THREE_OR_MORE_DWELL_SECONDS,
     "standby_beep_delay_seconds": STANDBY_BEEP_DELAY_SECONDS,
+    "alert_duration_seconds": 12.0,
 }
 # Keep hardware delivery independent from browser audio playback acknowledgments.
 hardware_alert_active = False
+hardware_alert_deadline = None
+hardware_manual_mode = False
+
+
+def clear_hardware_alert():
+    global hardware_alert_active, hardware_alert_deadline
+    hardware_alert_active = False
+    hardware_alert_deadline = None
+
+
+def activate_hardware_alert():
+    global hardware_alert_active, hardware_alert_deadline
+    hardware_alert_active = True
+    hardware_alert_deadline = time.monotonic() + float(alert_settings["alert_duration_seconds"])
+
+
+def expire_hardware_alert_if_needed():
+    if hardware_alert_active and hardware_alert_deadline is not None and time.monotonic() >= hardware_alert_deadline:
+        clear_hardware_alert()
+        alert_controller.finish_alert()
 
 
 @app.get("/api/audio/{filename}")
@@ -92,6 +113,7 @@ def get_alert_audio(filename: str):
 @app.post("/api/alert-finished")
 def alert_finished():
     """Let the browser release the alert playback lock after audio ends or is stopped."""
+    expire_hardware_alert_if_needed()
     # When hardware delivery is enabled, wait for the MCU to acknowledge its output sequence.
     if not hardware_alert_active:
         alert_controller.finish_alert()
@@ -101,32 +123,50 @@ def alert_finished():
 @app.get("/api/hardware-alert")
 def hardware_alert_status():
     """Expose the active alert latch for an ESP32 polling over the local network."""
-    return {"active": hardware_alert_active, "enabled": HARDWARE_ALERT_ENABLED}
+    expire_hardware_alert_if_needed()
+    remaining_ms = max(0, int((hardware_alert_deadline - time.monotonic()) * 1000)) if hardware_alert_active and hardware_alert_deadline is not None else 0
+    return {
+        "active": hardware_alert_active,
+        "enabled": HARDWARE_ALERT_ENABLED,
+        "manual_mode": hardware_manual_mode,
+        "remaining_ms": remaining_ms,
+    }
+
+
+class HardwareManualModeUpdate(BaseModel):
+    enabled: bool
+
+
+@app.post("/api/hardware-alert/manual-mode")
+def update_hardware_manual_mode(settings: HardwareManualModeUpdate):
+    """Tell the ESP32 whether to show its manual-mode idle signal."""
+    global hardware_manual_mode
+    hardware_manual_mode = settings.enabled
+    if not hardware_manual_mode:
+        clear_hardware_alert()
+    return {"manual_mode": hardware_manual_mode, "active": hardware_alert_active}
 
 
 @app.post("/api/hardware-alert/manual")
 def start_manual_hardware_alert():
     """Latch a manual dashboard alert for the ESP32 to pick up on its next poll."""
-    global hardware_alert_active
     if not HARDWARE_ALERT_ENABLED:
         raise HTTPException(status_code=503, detail="Hardware alerts are disabled on the backend.")
-    hardware_alert_active = True
-    return {"status": "active"}
+    activate_hardware_alert()
+    return {"status": "active", "duration_seconds": alert_settings["alert_duration_seconds"]}
 
 
 @app.post("/api/hardware-alert/cancel")
 def cancel_manual_hardware_alert():
     """Clear a manual hardware alert when the operator stops it from the dashboard."""
-    global hardware_alert_active
-    hardware_alert_active = False
+    clear_hardware_alert()
     return {"status": "ready"}
 
 
 @app.post("/api/hardware-alert/finished")
 def hardware_alert_finished():
     """Acknowledge that the external light/sound sequence completed."""
-    global hardware_alert_active
-    hardware_alert_active = False
+    clear_hardware_alert()
     alert_controller.finish_alert()
     return {"status": "ready"}
 
@@ -167,6 +207,11 @@ def initialize_database():
                 inference_latency_ms REAL NOT NULL,
                 end_to_end_alert_latency_seconds REAL,
                 gpio_output_activation_latency_ms REAL
+            );
+            CREATE TABLE IF NOT EXISTS alert_presets (
+                preset_key TEXT PRIMARY KEY,
+                settings_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             );
             INSERT OR IGNORE INTO dashboard_stats (id, people_seen) VALUES (1, 0);
             """
@@ -291,6 +336,10 @@ class AlertSettingsUpdate(BaseModel):
     two_person_dwell_seconds: float = Field(ge=0.0, le=300.0)
     three_or_more_dwell_seconds: float = Field(ge=0.0, le=300.0)
     standby_beep_delay_seconds: float = Field(ge=0.0, le=60.0)
+    alert_duration_seconds: float = Field(ge=1.0, le=300.0)
+
+
+ALERT_PRESET_KEYS = {"peak-hours", "off-peak-hours"}
 
 
 @app.get("/api/alert-settings")
@@ -310,6 +359,32 @@ def update_alert_settings(settings: AlertSettingsUpdate):
     alert_settings.update(updated)
     apply_alert_settings()
     return dict(alert_settings)
+
+
+@app.get("/api/alert-presets")
+def get_alert_presets():
+    with closing(connect_database()) as connection:
+        rows = connection.execute("SELECT preset_key, settings_json FROM alert_presets").fetchall()
+    presets = {key: None for key in ALERT_PRESET_KEYS}
+    for row in rows:
+        if row["preset_key"] in presets:
+            presets[row["preset_key"]] = json.loads(row["settings_json"])
+    return presets
+
+
+@app.put("/api/alert-presets/{preset_key}")
+def save_alert_preset(preset_key: str, settings: AlertSettingsUpdate):
+    if preset_key not in ALERT_PRESET_KEYS:
+        raise HTTPException(status_code=404, detail="Unknown alert preset.")
+    saved_settings = settings.model_dump()
+    with closing(connect_database()) as connection:
+        connection.execute(
+            "INSERT INTO alert_presets (preset_key, settings_json, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(preset_key) DO UPDATE SET settings_json = excluded.settings_json, updated_at = excluded.updated_at",
+            (preset_key, json.dumps(saved_settings), datetime.now(timezone.utc).isoformat()),
+        )
+        connection.commit()
+    return {"preset_key": preset_key, "settings": saved_settings}
 
 
 def get_model():
@@ -569,8 +644,8 @@ async def detect(request: Request):
         detection_zone[key] for key in ("x", "y", "width", "height")
     )
     alert_status = alert_controller.update(people_count, zone_key, time.monotonic())
-    if alert_status["trigger"] and HARDWARE_ALERT_ENABLED:
-        hardware_alert_active = True
+    if alert_status["trigger"] and HARDWARE_ALERT_ENABLED and not hardware_manual_mode:
+        activate_hardware_alert()
 
     with closing(connect_database()) as connection:
         if event:
@@ -600,6 +675,7 @@ async def detect(request: Request):
             "two_person_dwell_seconds": ALERT_TWO_PERSON_DWELL_SECONDS,
             "three_or_more_dwell_seconds": ALERT_THREE_OR_MORE_DWELL_SECONDS,
             "standby_beep_delay_seconds": STANDBY_BEEP_DELAY_SECONDS,
+            "alert_duration_seconds": alert_settings["alert_duration_seconds"],
         },
         "average_confidence": round(sum(item["confidence"] for item in detections) / len(detections), 1) if detections else None,
         "total_people_seen": get_people_seen(),

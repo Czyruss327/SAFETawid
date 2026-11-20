@@ -1,6 +1,6 @@
 # Physical ESP32-S3 alert controller
 
-This firmware is for the physical ESP32-S3, green and red LEDs driven through transistors, and a passive piezo buzzer. USB-C powers and programs the board and provides serial logs. The ESP32 uses Wi-Fi to poll FastAPI; USB does not carry alert requests.
+This firmware is for the physical ESP32-S3, green and red LEDs driven through transistors, and a passive piezo buzzer. The ESP32 uses Wi-Fi to poll FastAPI and supports wireless firmware updates after its initial USB flash. USB is not needed for normal use or serial monitoring. Power the board from USB-C or a suitable external 5 V supply.
 
 ## Wiring
 
@@ -8,22 +8,30 @@ Disconnect USB power before wiring.
 
 | ESP32-S3 | Connection |
 | --- | --- |
-| GPIO 17 | Green LED transistor control input |
-| GPIO 18 | Red LED transistor control input |
-| GPIO 36 | Piezo positive (+) |
+| GPIO 35 | Top pedestrian green |
+| GPIO 36 | Top pedestrian red |
+| GPIO 38 | Top vehicle red |
+| GPIO 37 | Top vehicle green |
+| GPIO 18 | Bottom vehicle red |
+| GPIO 17 | Bottom vehicle green |
+| GPIO 15 | Bottom pedestrian red |
+| GPIO 14 | Bottom pedestrian green |
+| GPIO 42 | Piezo positive (+) |
 | GND | Piezo negative (−) |
 
-The green LED indicates the board can reach the backend. During an alert, green turns off while red flashes and the piezo sounds for five seconds. Adjust `BUZZER_VOLUME_PERCENT` near the top of `src/main.cpp` from `0` (silent) to `100` (strongest PWM setting), then upload again. Perceived loudness may not change linearly with the number. The firmware expects a passive piezo. The LED transistors should be wired as drivers with a shared ground; do not power the LEDs directly from the GPIO pins. Some ESP32-S3 board variants reserve GPIO 36 for flash or PSRAM. If yours does, choose a free GPIO and change `BUZZER_PIN` in `src/main.cpp` to match.
+At idle, both pedestrian signals are red and both vehicle signals are green. During an alert, both pedestrian signals turn green and both vehicle signals turn red; the piezo sounds intermittently for the configured **Alert output duration** in the dashboard settings. The dashboard's green **Stop** button ends a manual alert early and restores the idle phase. The firmware turns all green outputs off before changing phases to prevent conflicting green signals. Adjust `BUZZER_VOLUME_PERCENT` near the top of `src/main.cpp` from `0` (silent) to `100` (strongest PWM setting). The firmware expects a passive piezo. Use suitable current-limiting resistors or transistor drivers for the LEDs; do not power high-current loads directly from GPIO pins. Confirm your exact ESP32-S3 board exposes GPIO 42 and these other pins before wiring.
 
 ## Configure and run
 
-Wi-Fi details and the computer API address are saved on the ESP32, outside the firmware source. You only need to upload firmware again if you change the wiring or firmware itself.
+You do not need to put Wi-Fi credentials or the backend address in PlatformIO or edit the firmware for each network. The firmware must be uploaded once to a new board, using USB. After that, power the ESP32 normally; it opens its own setup Wi-Fi page when it has no saved connection. Connect to the `SAFETawid-Setup-...` network with password `TawidSetup26`, then enter the Wi-Fi details and backend address on `http://192.168.4.1`. The ESP32 saves them internally. You do not need to keep a USB connection or serial monitor open during normal operation. Later firmware updates can be sent wirelessly while the ESP32 and computer are on the same network; the OTA upload password is the configured Wi-Fi password.
+
+For an optional wireless firmware update, open PowerShell in the `hardware` folder, set `$env:SAFETAWID_OTA_PASSWORD` to the ESP32's Wi-Fi password, then run `pio run -e esp32-s3-ota -t upload`. The first firmware upload still has to use USB because the blank board has no OTA service yet.
 
 1. In the desktop app's local data folder, open `desktop-config.json` and set `allowEsp32LanAccess` and `hardwareAlertsEnabled` to `true`. Keep the computer and ESP32 on the same trusted private Wi-Fi network. Restart the app after changing the file.
 2. Start the desktop app and note the `ESP32 API listening on ...` address in its startup output. Find the computer's private LAN IPv4 address in Windows Network settings. Combine it with the API port, for example `http://192.168.1.20:8000`.
-3. On first power-up, connect a phone or computer to the Wi-Fi network named `SAFETawid-Setup-...`. The setup password and address `http://192.168.4.1` are printed to the USB serial monitor at 115200 baud. Enter the site's Wi-Fi name/password and the computer API address, then save. The ESP32 stores these settings and restarts.
-4. To change saved settings later, hold the ESP32 board's **BOOT** button for 3 seconds while it is running. Connect again to its `SAFETawid-Setup-...` network and submit the updated values. The password is shown in the USB serial monitor.
-5. The green LED turns on after the ESP32 can reach the backend. Start the camera/dashboard; alerts then trigger the red LED and buzzer. USB is still used for power, firmware upload, and setup logs; alert requests continue over Wi-Fi.
+3. On first power-up, connect a phone or computer to the Wi-Fi network named `SAFETawid-Setup-...` using password `TawidSetup26`. Open `http://192.168.4.1`, enter the site's Wi-Fi name/password and the computer API address, then save. The ESP32 stores these settings and restarts.
+4. To change saved settings later, hold the ESP32 board's **BOOT** button for 3 seconds while it is running. Connect again to its `SAFETawid-Setup-...` network with password `TawidSetup26` and submit the updated values.
+5. At idle, the pedestrian signals show red and the vehicle signals show green. Use the dashboard's red **Trigger** and green **Stop** buttons to switch and restore the crossing phase. The ESP32 polls the backend over Wi-Fi.
 
 If you run FastAPI directly instead of through the desktop app, enable hardware alerts and make it reachable on the trusted LAN:
 

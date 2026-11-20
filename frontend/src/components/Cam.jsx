@@ -42,6 +42,8 @@ export default function Cam() {
   const alertAudioRef = useRef(null);
   const alertPlayingRef = useRef(false);
   const alertPlaybackGenerationRef = useRef(0);
+  const manualAlertTimerRef = useRef(null);
+  const alertDurationRef = useRef(12);
   const manualHardwareAlertRef = useRef(false);
   const manualAlertRequestRef = useRef(0);
   const previousManualModeRef = useRef(false);
@@ -189,7 +191,7 @@ export default function Cam() {
     play();
   };
 
-  const playAlertSound = async (repeatUntilStopped = false) => {
+  const playAlertSound = async (repeatUntilStopped = false, durationSeconds = 0) => {
     if (alertPlayingRef.current) return false;
     if (!soundEnabled) {
       await fetch(apiUrl("/api/alert-finished"), { method: "POST" }).catch(() => {});
@@ -199,22 +201,38 @@ export default function Cam() {
     const audio = alertAudioRef.current || new Audio(apiUrl("/api/audio/beep3.mp3"));
     alertAudioRef.current = audio;
     const generation = ++alertPlaybackGenerationRef.current;
+    const durationMs = Math.max(0, Number(durationSeconds) * 1000);
     audio.currentTime = 0;
     alertPlayingRef.current = true;
     setManualAlertActive(true);
     let playbackSucceeded = false;
     try {
-      do {
+      if (durationMs > 0) {
+        audio.loop = true;
         await new Promise((resolve, reject) => {
-          audio.onended = resolve;
           audio.onerror = () => reject(new Error("Alert audio could not be played."));
-          audio.play().then(() => { playbackSucceeded = true; }).catch(reject);
+          audio.play().then(() => {
+            playbackSucceeded = true;
+            window.setTimeout(resolve, durationMs);
+          }).catch(reject);
         });
-        if (repeatUntilStopped && manualMode && alertPlayingRef.current) audio.currentTime = 0;
-      } while (repeatUntilStopped && manualMode && alertPlayingRef.current);
+        audio.pause();
+        audio.currentTime = 0;
+        audio.loop = false;
+      } else {
+        do {
+          await new Promise((resolve, reject) => {
+            audio.onended = resolve;
+            audio.onerror = () => reject(new Error("Alert audio could not be played."));
+            audio.play().then(() => { playbackSucceeded = true; }).catch(reject);
+          });
+          if (repeatUntilStopped && manualMode && alertPlayingRef.current) audio.currentTime = 0;
+        } while (repeatUntilStopped && manualMode && alertPlayingRef.current);
+      }
     } catch {
       // A blocked or unavailable alert sound should not prevent standby mode.
     } finally {
+      audio.loop = false;
       // Only the current playback may unlock the backend or restart standby audio.
       if (generation === alertPlaybackGenerationRef.current) {
         await fetch(apiUrl("/api/alert-finished"), { method: "POST" }).catch(() => {});
@@ -231,12 +249,15 @@ export default function Cam() {
     const cancelHardware = manualHardwareAlertRef.current;
     manualAlertRequestRef.current += 1;
     manualHardwareAlertRef.current = false;
+    if (manualAlertTimerRef.current) window.clearTimeout(manualAlertTimerRef.current);
+    manualAlertTimerRef.current = null;
     alertPlaybackGenerationRef.current += 1;
     alertPlayingRef.current = false;
     setManualAlertActive(false);
     if (alertAudioRef.current) {
       alertAudioRef.current.pause();
       alertAudioRef.current.currentTime = 0;
+      alertAudioRef.current.loop = false;
     }
     if (wasPlaying) fetch(apiUrl("/api/alert-finished"), { method: "POST" }).catch(() => {});
     if (cancelHardware) {
@@ -253,7 +274,15 @@ export default function Cam() {
     setManualAlertActive(true);
     setManualAlertStatus("Sending manual alert to the hardware…");
     // Start browser playback directly from the click so browser audio permission is preserved.
-    void playAlertSound(true);
+    const durationMs = Math.max(1000, alertDurationRef.current * 1000);
+    void playAlertSound(true, durationMs / 1000);
+    if (manualAlertTimerRef.current) window.clearTimeout(manualAlertTimerRef.current);
+    manualAlertTimerRef.current = window.setTimeout(() => {
+      manualHardwareAlertRef.current = false;
+      setManualAlertActive(false);
+      setManualAlertStatus("Manual alert completed.");
+      manualAlertTimerRef.current = null;
+    }, durationMs);
     fetch(apiUrl("/api/hardware-alert/manual"), { method: "POST" })
       .then(async (response) => {
         if (!response.ok) {
@@ -271,6 +300,8 @@ export default function Cam() {
       .catch((error) => {
         if (requestId === manualAlertRequestRef.current) {
           manualHardwareAlertRef.current = false;
+          if (manualAlertTimerRef.current) window.clearTimeout(manualAlertTimerRef.current);
+          manualAlertTimerRef.current = null;
           setManualAlertActive(alertPlayingRef.current);
           setManualAlertStatus(error.message || "Could not reach the hardware alert service.");
         }
@@ -293,6 +324,14 @@ export default function Cam() {
       window.localStorage.setItem(ALERT_MODE_STORAGE_KEY, String(manualMode));
     } catch { /* Alert preferences still apply for this session. */ }
   }, [alertSchedule, manualMode]);
+
+  useEffect(() => {
+    fetch(apiUrl("/api/hardware-alert/manual-mode"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: manualMode }),
+    }).catch(() => {});
+  }, [manualMode]);
 
   useEffect(() => {
     const modeChanged = previousManualModeRef.current !== manualMode;
@@ -470,13 +509,16 @@ export default function Cam() {
         setServiceState("live");
         setServiceMessage("Python is processing the live camera feed.");
         const settings = data.alert_settings || {};
+        if (Number.isFinite(Number(settings.alert_duration_seconds))) {
+          alertDurationRef.current = Math.max(1, Number(settings.alert_duration_seconds));
+        }
         standbyDelayRef.current = settings.standby_beep_delay_seconds || 1;
         standbyWantedRef.current = !manualMode && (data.alert_pending || data.count === 0);
         if (manualMode) {
           stopStandbySound();
           if (data.alert_trigger) fetch(apiUrl("/api/alert-finished"), { method: "POST" }).catch(() => {});
         } else if (data.alert_trigger) {
-          void playAlertSound();
+          void playAlertSound(false, alertDurationRef.current);
         } else if (standbyWantedRef.current) {
           startStandbySound(settings.standby_beep_delay_seconds || 3);
         } else {
