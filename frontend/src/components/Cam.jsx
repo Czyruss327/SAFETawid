@@ -20,10 +20,11 @@ const THEME_STORAGE_KEY = "school-zone-theme";
 // The browser owns user preferences and media playback; the API owns detection state and dwell timing.
 function loadDetectionZone() {
   try {
-    const zone = JSON.parse(window.localStorage.getItem(DETECTION_ZONE_STORAGE_KEY));
-    if (!zone || ![zone.x, zone.y, zone.width, zone.height].every(Number.isFinite)) return null;
-    if (zone.x < 0 || zone.y < 0 || zone.width <= 0 || zone.height <= 0 || zone.x + zone.width > 1 || zone.y + zone.height > 1) return null;
-    return zone;
+    const stored = JSON.parse(window.localStorage.getItem(DETECTION_ZONE_STORAGE_KEY));
+    const zones = Array.isArray(stored) ? stored : stored ? [stored] : [];
+    return zones.filter((zone) => zone && [zone.x, zone.y, zone.width, zone.height].every(Number.isFinite)
+      && zone.x >= 0 && zone.y >= 0 && zone.width > 0 && zone.height > 0
+      && zone.x + zone.width <= 1 && zone.y + zone.height <= 1).slice(0, 2);
   } catch {
     return null;
   }
@@ -57,6 +58,7 @@ export default function Cam() {
   const [cameraFps, setCameraFps] = useState(0);
   const [detectionZone, setDetectionZone] = useState(loadDetectionZone);
   const [editingZone, setEditingZone] = useState(false);
+  const [editingZoneIndex, setEditingZoneIndex] = useState(0);
   const [alertSchedule, setAlertSchedule] = useState(() => {
     try { return window.localStorage.getItem(ALERT_SCHEDULE_STORAGE_KEY) || ""; }
     catch { return ""; }
@@ -390,7 +392,7 @@ export default function Cam() {
 
   useEffect(() => {
     try {
-      if (detectionZone) window.localStorage.setItem(DETECTION_ZONE_STORAGE_KEY, JSON.stringify(detectionZone));
+      if (detectionZone.some(Boolean)) window.localStorage.setItem(DETECTION_ZONE_STORAGE_KEY, JSON.stringify(detectionZone.filter(Boolean)));
       else window.localStorage.removeItem(DETECTION_ZONE_STORAGE_KEY);
     } catch {
       // The zone still works for this session when browser storage is unavailable.
@@ -483,7 +485,7 @@ export default function Cam() {
           method: "POST",
           headers: {
             "Content-Type": "image/jpeg",
-            "X-Detection-Zone": JSON.stringify(detectionZone),
+            "X-Detection-Zone": JSON.stringify(detectionZone.filter(Boolean)),
           },
           body: frame,
         });
@@ -670,10 +672,17 @@ export default function Cam() {
               cameraFps={cameraFps}
               detectionZone={detectionZone}
               editingZone={editingZone}
+              editingZoneIndex={editingZoneIndex}
               onEditingZoneChange={setEditingZone}
-              onDetectionZoneChange={setDetectionZone}
+              onEditDetectionZone={(index) => { setEditingZoneIndex(index); setEditingZone(true); }}
+              onDetectionZoneChange={(zone, index) => setDetectionZone((zones) => {
+                const next = [...zones];
+                next[index] = zone;
+                return next.slice(0, 2);
+              })}
+              onAddDetectionZone={() => { setDetectionZone((zones) => zones.length < 2 ? [...zones, null] : zones); setEditingZoneIndex(1); setEditingZone(true); }}
               onDetectionZoneReset={() => {
-                setDetectionZone(null);
+                setDetectionZone([]);
                 setEditingZone(false);
               }}
             />

@@ -525,18 +525,23 @@ def api_device_name(device):
 
 
 def parse_detection_zone(value):
-    """Parse and validate the browser's normalized rectangle header; absent means full frame."""
+    """Parse up to two normalized rectangles; an empty list means full frame."""
     if not value or value == "null":
         return None
     try:
-        zone = json.loads(value)
-        x, y, width, height = (zone[key] for key in ("x", "y", "width", "height"))
-        if not all(isinstance(item, (int, float)) and math.isfinite(item) for item in (x, y, width, height)):
-            raise ValueError("Zone coordinates must be finite numbers.")
-        # Coordinates are normalized against the submitted frame, matching the browser's resize-safe overlay.
-        if x < 0 or y < 0 or width <= 0 or height <= 0 or x + width > 1 or y + height > 1:
-            raise ValueError("Zone must be a non-empty rectangle inside the camera frame.")
-        return {"x": x, "y": y, "width": width, "height": height}
+        payload = json.loads(value)
+        zones = payload if isinstance(payload, list) else [payload]
+        if len(zones) > 2:
+            raise ValueError("At most two detection areas are supported.")
+        parsed = []
+        for zone in zones:
+            x, y, width, height = (zone[key] for key in ("x", "y", "width", "height"))
+            if not all(isinstance(item, (int, float)) and math.isfinite(item) for item in (x, y, width, height)):
+                raise ValueError("Zone coordinates must be finite numbers.")
+            if x < 0 or y < 0 or width <= 0 or height <= 0 or x + width > 1 or y + height > 1:
+                raise ValueError("Zone must be a non-empty rectangle inside the camera frame.")
+            parsed.append({"x": x, "y": y, "width": width, "height": height})
+        return parsed or None
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
         raise HTTPException(status_code=400, detail=f"Invalid detection zone: {error}") from error
 
@@ -690,9 +695,10 @@ async def detect(request: Request):
         if detection_zone:
             center_x = ((x1 + x2) / 2) / image.width
             center_y = ((y1 + y2) / 2) / image.height
-            if not (
-                detection_zone["x"] <= center_x <= detection_zone["x"] + detection_zone["width"]
-                and detection_zone["y"] <= center_y <= detection_zone["y"] + detection_zone["height"]
+            if not any(
+                zone["x"] <= center_x <= zone["x"] + zone["width"]
+                and zone["y"] <= center_y <= zone["y"] + zone["height"]
+                for zone in detection_zone
             ):
                 continue
         detections.append({"label": "Person", "confidence": round(confidence * 100, 1), "box": [x1, y1, x2, y2]})
@@ -712,7 +718,7 @@ async def detect(request: Request):
 
     people_count = len(detections)
     zone_key = None if detection_zone is None else tuple(
-        detection_zone[key] for key in ("x", "y", "width", "height")
+        tuple(zone[key] for key in ("x", "y", "width", "height")) for zone in detection_zone
     )
     expire_hardware_alert_if_needed()
     detection_now = time.monotonic()

@@ -24,6 +24,9 @@ export default function CameraFeed({
   cameraFps = 0,
   detectionZone,
   editingZone,
+  editingZoneIndex = 0,
+  onEditDetectionZone,
+  onAddDetectionZone,
   onEditingZoneChange,
   onDetectionZoneChange,
   onDetectionZoneReset,
@@ -78,7 +81,7 @@ export default function CameraFeed({
     setDraftZone(null);
     // Reject accidental clicks and tiny selections that would be hard to inspect or use reliably.
     if (nextZone.width >= 0.02 && nextZone.height >= 0.02) {
-      onDetectionZoneChange(nextZone);
+      onDetectionZoneChange(nextZone, editingZoneIndex);
       onEditingZoneChange(false);
     }
   };
@@ -136,12 +139,12 @@ export default function CameraFeed({
                 </g>
               );
             })}
-            {detectionZone && !draftZone && (
-              <g className="detection-zone-shape">
-                <rect x={detectionZone.x * viewWidth} y={detectionZone.y * viewHeight} width={detectionZone.width * viewWidth} height={detectionZone.height * viewHeight} />
-                <text x={detectionZone.x * viewWidth + 8} y={detectionZone.y * viewHeight + 22}>DETECTION AREA</text>
+            {detectionZone.filter(Boolean).map((zone, index) => !draftZone && (
+              <g className="detection-zone-shape" key={index}>
+                <rect x={zone.x * viewWidth} y={zone.y * viewHeight} width={zone.width * viewWidth} height={zone.height * viewHeight} />
+                <text x={zone.x * viewWidth + 8} y={zone.y * viewHeight + 22}>DETECTION AREA {index + 1}</text>
               </g>
-            )}
+            ))}
             {draftZone && (
               <rect className="detection-zone-draft" x={draftZone.x * viewWidth} y={draftZone.y * viewHeight} width={draftZone.width * viewWidth} height={draftZone.height * viewHeight} />
             )}
@@ -166,15 +169,17 @@ export default function CameraFeed({
         <div className="feed-meta">
           <span><i className={live ? "meta-green" : ""} />{live ? "Camera connected" : "No camera signal"}</span>
           <span className="meta-divider" />
-          <span>{live ? (detectionZone ? "Custom detection area" : "Detecting full frame") : "Awaiting video input"}</span>
+          <span>{live ? (detectionZone.some(Boolean) ? `${detectionZone.filter(Boolean).length} detection area${detectionZone.filter(Boolean).length > 1 ? "s" : ""}` : "Detecting full frame") : "Awaiting video input"}</span>
         </div>
         <div className="feed-actions">
           {live && (
             <>
-              <button className={`camera-action ${editingZone ? "camera-action-stop" : ""}`} onClick={() => editingZone ? cancelZoneEditing() : onEditingZoneChange(true)}>
-                {editingZone ? "Cancel area" : "Edit detection area"}
+              <button className={`camera-action ${editingZone ? "camera-action-stop" : ""}`} onClick={() => editingZone ? cancelZoneEditing() : onEditDetectionZone(0)}>
+                {editingZone ? "Cancel area" : detectionZone[0] ? "Edit area 1" : "Add detection area"}
               </button>
-              {detectionZone && !editingZone && <button className="camera-action" onClick={onDetectionZoneReset}>Use full frame</button>}
+              {detectionZone[1] && !editingZone && <button className="camera-action" onClick={() => onEditDetectionZone(1)}>Edit area 2</button>}
+              {detectionZone.filter(Boolean).length === 1 && !editingZone && <button className="camera-action" onClick={onAddDetectionZone}>Add second area</button>}
+              {detectionZone.some(Boolean) && !editingZone && <button className="camera-action" onClick={onDetectionZoneReset}>Use full frame</button>}
             </>
           )}
           {cameras.length > 1 && (
