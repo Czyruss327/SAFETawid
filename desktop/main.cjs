@@ -68,6 +68,8 @@ function startBackend(config) {
       TELEMETRY_KEY_PATH: path.join(dataDir, "telemetry.key"),
       EXPORT_DIRECTORY: path.join(dataDir, "exports"),
       HARDWARE_ALERT_ENABLED: String(Boolean(config.hardwareAlertsEnabled)),
+      ESP32_DISCOVERY_ENABLED: String(Boolean(config.allowEsp32LanAccess && config.hardwareAlertsEnabled)),
+      ESP32_DISCOVERY_PORT: String(apiPort),
       DATA_RETENTION_DAYS: String(Math.max(0, Number(config.retentionDays) || 0)),
       YOLO_MODEL: config.model || "yolo11m.pt",
       YOLO_DEVICE: process.env.YOLO_DEVICE || config.device || "auto",

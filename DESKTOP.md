@@ -24,15 +24,17 @@ To delete local records, quit the app, then remove `school_zone.db`, `school_zon
 
 The app creates `desktop-config.json` under the local data folder on first launch:
 
-- `allowEsp32LanAccess`: defaults to `false`; set to `true` on the designated trusted school LAN when the ESP32 needs to connect. The OS firewall may need a narrow local-network rule. The startup output shows the API port; enter the computer's reserved LAN IP and that port in the ESP32 setup page. Do not forward that port from the router or expose it through a public tunnel.
-- `apiPort`: defaults to `8000`; the actual selected API port is printed at startup and should be entered in the ESP32 setup page.
+- `allowEsp32LanAccess`: defaults to `false`; set to `true` on the designated trusted school LAN when the ESP32 needs to connect. The OS firewall may need a narrow local-network rule. Do not forward the port from the router or expose it through a public tunnel.
+- `apiPort`: defaults to `8000`; the backend advertises its selected port and LAN address over mDNS when LAN access and hardware alerts are both enabled. ESP32 discovers it automatically, even if the app had to select a different port.
 - `hardwareAlertsEnabled`: defaults to `false`; set to `true` when the approved deployment calls for physical alerts.
 - `retentionDays`: set to the UREC-approved data retention period in days; zero means no automatic cleanup.
 - `pythonExecutable`: optional full path to a Python executable if it is not `backend/.venv/Scripts/python.exe`.
 - `model`: local model filename or supported Ultralytics model name.
 - `device`: `auto` (default), `cpu`, or a CUDA device such as `cuda:0`. Use `cpu` to avoid GPU/CUDA runtime problems.
 
-Close and restart the desktop app after changing configuration. ESP32 Wi-Fi credentials and backend URL are configured through its on-device setup Wi-Fi page, not in firmware source. Dashboard alert thresholds remain editable in **Dashboard menu → Alert settings**. Hardware access exposes the backend to other devices on the local network and does not add user authentication; use it only on a trusted, access-controlled LAN.
+Close and restart the desktop app after changing configuration. ESP32 Wi-Fi credentials are configured through its on-device setup Wi-Fi page; the backend address is discovered automatically. Dashboard alert thresholds remain editable in **Dashboard menu → Alert settings**. Hardware access exposes the backend to other devices on the local network and does not add user authentication; use it only on a trusted, access-controlled LAN.
+
+For automatic ESP32 connection, run `npm run backend:setup` to install the backend's mDNS service advertiser. Set both `allowEsp32LanAccess` and `hardwareAlertsEnabled` to `true`, restart the desktop app, and allow its API TCP port plus mDNS multicast (UDP 5353) on the Windows Private network if prompted. On first setup, enter only the site's Wi-Fi credentials in the ESP32 setup page. The ESP32 then discovers the API automatically and repeats discovery after reconnecting. The computer and ESP32 must share a LAN that permits multicast; guest Wi-Fi/client isolation can block discovery.
 
 ## CUDA setup troubleshooting
 

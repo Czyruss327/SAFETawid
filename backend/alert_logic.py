@@ -5,10 +5,13 @@ class PedestrianAlertController:
     required dwell duration without resetting elapsed time; an empty frame or changed zone resets it.
     """
 
-    def __init__(self, one_person_seconds=12.0, two_persons_seconds=8.0, three_or_more_seconds=5.0):
+    def __init__(self, one_person_seconds=12.0, two_persons_seconds=8.0, three_or_more_seconds=5.0, cooldown_seconds=0.0):
         self.one_person_seconds = max(0.0, float(one_person_seconds))
         self.two_persons_seconds = max(0.0, float(two_persons_seconds))
         self.three_or_more_seconds = max(0.0, float(three_or_more_seconds))
+        self.cooldown_seconds = max(0.0, float(cooldown_seconds))
+        self.cooldown_until = 0.0
+        self.cooldown_needs_clock = False
         self.zone_key = None
         self.started_at = None
         self.alert_playing = False
@@ -27,6 +30,13 @@ class PedestrianAlertController:
             # Keep later triggers serialized until the browser acknowledges audio completion.
             return {"trigger": False, "pending": False, "alert_playing": True}
 
+        if self.cooldown_needs_clock:
+            self.cooldown_until = now + self.cooldown_seconds
+            self.cooldown_needs_clock = False
+        if now < self.cooldown_until:
+            self.started_at = None
+            return {"trigger": False, "pending": False, "alert_playing": False}
+
         if people_count == 1:
             current_requirement = self.one_person_seconds
         elif people_count == 2:
@@ -43,7 +53,12 @@ class PedestrianAlertController:
 
         return {"trigger": False, "pending": True, "alert_playing": False}
 
-    def finish_alert(self):
+    def finish_alert(self, now=None):
         """Release the playback lock and require a fresh dwell period for the next alert."""
         self.alert_playing = False
         self.started_at = None
+        if now is None:
+            self.cooldown_needs_clock = True
+        else:
+            self.cooldown_until = now + self.cooldown_seconds
+            self.cooldown_needs_clock = False

@@ -14,30 +14,34 @@ Disconnect USB power before wiring.
 | GPIO 37 | Top vehicle green |
 | GPIO 18 | Bottom vehicle red |
 | GPIO 17 | Bottom vehicle green |
+| GPIO 16 | Bottom pedestrian green |
 | GPIO 15 | Bottom pedestrian red |
-| GPIO 14 | Bottom pedestrian green |
 | GPIO 42 | Piezo positive (+) |
 | GND | Piezo negative (−) |
 
-At idle, both pedestrian signals are red and both vehicle signals are green. During an alert, both pedestrian signals turn green and both vehicle signals turn red; the piezo sounds intermittently for the configured **Alert output duration** in the dashboard settings. The dashboard's green **Stop** button ends a manual alert early and restores the idle phase. The firmware turns all green outputs off before changing phases to prevent conflicting green signals. Adjust `BUZZER_VOLUME_PERCENT` near the top of `src/main.cpp` from `0` (silent) to `100` (strongest PWM setting). The firmware expects a passive piezo. Use suitable current-limiting resistors or transistor drivers for the LEDs; do not power high-current loads directly from GPIO pins. Confirm your exact ESP32-S3 board exposes GPIO 42 and these other pins before wiring.
+At idle, GPIO 36 and 15 show pedestrian red while GPIO 37 and 17 show motorist green. When the dashboard's detection alert fires, pedestrian green (GPIO 35 and 16), motorist red (GPIO 38 and 18), dashboard sound, and the buzzer start together. The configurable **Pedestrian green + alert duration** controls how long both pedestrian green and buzzer are active. The buzzer uses short beeps throughout that same interval; during its final 3 seconds the pedestrian green and motorist red blink faster and the buzzer beeps faster. At the end, buzzer and pedestrian green stop together and the motorist green/pedestrian red phase resumes. A configurable cooldown prevents another detection alert until the selected delay passes. The firmware turns all green outputs off before changing phases to prevent conflicting green signals. Adjust `BUZZER_VOLUME_PERCENT` near the top of `src/main.cpp` from `0` (silent) to `100` (strongest PWM setting). The firmware expects a passive piezo. Use suitable current-limiting resistors or transistor drivers for the LEDs; do not power high-current loads directly from GPIO pins. Confirm your exact ESP32-S3 board exposes GPIO 42 and these other pins before wiring.
 
 ## Configure and run
 
-You do not need to put Wi-Fi credentials or the backend address in PlatformIO or edit the firmware for each network. The firmware must be uploaded once to a new board, using USB. After that, power the ESP32 normally; it opens its own setup Wi-Fi page when it has no saved connection. Connect to the `SAFETawid-Setup-...` network with password `TawidSetup26`, then enter the Wi-Fi details and backend address on `http://192.168.4.1`. The ESP32 saves them internally. You do not need to keep a USB connection or serial monitor open during normal operation. Later firmware updates can be sent wirelessly while the ESP32 and computer are on the same network; the OTA upload password is the configured Wi-Fi password.
+You do not need to put Wi-Fi credentials or a backend address in PlatformIO. The firmware must be uploaded once to a new board over USB. On first power-up it opens a setup Wi-Fi page. Connect to the `SAFETawid-Setup-...` network (password `TawidSetup26`) and enter the site's Wi-Fi name and password at `http://192.168.4.1`. The ESP32 saves those credentials, joins the network, and discovers the desktop API automatically over mDNS; no computer IP or API port is entered. You do not need USB or a serial monitor during normal operation. Later firmware updates can be sent wirelessly while the ESP32 and computer are on the same network; the OTA upload password is the configured Wi-Fi password.
 
 For an optional wireless firmware update, open PowerShell in the `hardware` folder, set `$env:SAFETAWID_OTA_PASSWORD` to the ESP32's Wi-Fi password, then run `pio run -e esp32-s3-ota -t upload`. The first firmware upload still has to use USB because the blank board has no OTA service yet.
 
-1. In the desktop app's local data folder, open `desktop-config.json` and set `allowEsp32LanAccess` and `hardwareAlertsEnabled` to `true`. Keep the computer and ESP32 on the same trusted private Wi-Fi network. Restart the app after changing the file.
-2. Start the desktop app and note the `ESP32 API listening on ...` address in its startup output. Find the computer's private LAN IPv4 address in Windows Network settings. Combine it with the API port, for example `http://192.168.1.20:8000`.
-3. On first power-up, connect a phone or computer to the Wi-Fi network named `SAFETawid-Setup-...` using password `TawidSetup26`. Open `http://192.168.4.1`, enter the site's Wi-Fi name/password and the computer API address, then save. The ESP32 stores these settings and restarts.
-4. To change saved settings later, hold the ESP32 board's **BOOT** button for 3 seconds while it is running. Connect again to its `SAFETawid-Setup-...` network with password `TawidSetup26` and submit the updated values.
-5. At idle, the pedestrian signals show red and the vehicle signals show green. Use the dashboard's red **Trigger** and green **Stop** buttons to switch and restore the crossing phase. The ESP32 polls the backend over Wi-Fi.
+1. Run `npm run backend:setup` so the Python environment installs the mDNS advertiser dependency.
+2. In the desktop app's local data folder, set `allowEsp32LanAccess` and `hardwareAlertsEnabled` to `true` in `desktop-config.json`, then restart the app. Keep the computer and ESP32 on the same trusted private Wi-Fi network. Permit the API's TCP port and mDNS multicast (UDP 5353) on the Windows **Private** network profile if Windows Firewall asks. The dashboard's **Device setup** panel shows whether the ESP32 has checked in recently.
+3. On first power-up, connect a phone or computer to `SAFETawid-Setup-...` (password `TawidSetup26`), open `http://192.168.4.1`, enter the site's Wi-Fi name and password, and save. The ESP32 restarts, joins that Wi-Fi, discovers the SAFETawid API automatically, and begins polling it.
+4. On later power-ups, the ESP32 reconnects using its saved Wi-Fi credentials and rediscovers the API without setup or a BOOT-button press. To change Wi-Fi credentials, hold BOOT for 3 seconds while running and use the setup page again.
+5. At idle, pedestrians show red and vehicles show green. The ESP32 polls the backend for automatic detection alerts; dashboard **Trigger** and **Stop** buttons remain available for manual control.
+
+Automatic discovery requires mDNS multicast between the ESP32 and computer. They must be on the same LAN, and the Wi-Fi must not use guest/client isolation. If discovery fails, check the Windows private-network firewall rules and router multicast settings. The ESP32 retries discovery every 10 seconds.
 
 If you run FastAPI directly instead of through the desktop app, enable hardware alerts and make it reachable on the trusted LAN:
 
    ```powershell
    cd backend
    $env:HARDWARE_ALERT_ENABLED = "1"
+   $env:ESP32_DISCOVERY_ENABLED = "1"
+   $env:ESP32_DISCOVERY_PORT = "8000"
    uvicorn main:app --host 0.0.0.0 --port 8000
    ```
 

@@ -8,6 +8,7 @@ const defaults = {
   three_or_more_dwell_seconds: 5,
   standby_beep_delay_seconds: 1,
   alert_duration_seconds: 12,
+  cooldown_seconds: 10,
 };
 
 const fields = [
@@ -15,7 +16,8 @@ const fields = [
   ["one_person_dwell_seconds", "Alert delay · 1 person", 0, 300, 1, "sec", (value) => `${value} sec`],
   ["two_person_dwell_seconds", "Alert delay · 2 people", 0, 300, 1, "sec", (value) => `${value} sec`],
   ["three_or_more_dwell_seconds", "Alert delay · 3+ people", 0, 300, 1, "sec", (value) => `${value} sec`],
-  ["alert_duration_seconds", "Alert output duration", 1, 300, 1, "sec", (value) => `${value} sec`],
+  ["alert_duration_seconds", "Pedestrian green + alert duration", 1, 300, 1, "sec", (value) => `${value} sec`],
+  ["cooldown_seconds", "Cooldown before next alert", 0, 300, 1, "sec", (value) => `${value} sec`],
   ["standby_beep_delay_seconds", "Standby beep interval", 0, 60, 0.5, "sec", (value) => `${value} sec`],
 ];
 
@@ -97,7 +99,7 @@ export default function AlertSettingsPanel() {
 
   return <section className="panel alert-settings-panel" aria-label="Alert settings">
     <div className="panel-heading"><div><div className="section-kicker">DETECTION AND SOUND</div><h2>Alert settings</h2></div></div>
-    <p className="alert-settings-description">Changes apply to this detection service and are saved across restarts. Alert delays set how long a person must be detected before triggering; alert output duration sets how long the dashboard sound, hardware lights, and buzzer stay active.</p>
+    <p className="alert-settings-description">Changes apply to this detection service and are saved across restarts. Alert delays set how long a person must be detected before triggering. Pedestrian green, the hardware buzzer, and dashboard alert sound start together and use the same duration. The pedestrian green blinks faster and the buzzer beeps faster during the final 3 seconds. Cooldown prevents another alert until the selected delay has passed.</p>
     <div className="alert-presets" aria-label="Saved alert presets">
       {[["peak-hours", "Peak hours settings"], ["off-peak-hours", "Off-peak hours settings"]].map(([presetKey, label]) => (
         <div className="alert-preset-card" key={presetKey}>

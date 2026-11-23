@@ -6,9 +6,11 @@ import logging
 import math
 import os
 import sqlite3
+import socket
 import time
 from collections import deque
 from contextlib import closing
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from csv import writer
@@ -22,6 +24,8 @@ from cryptography.fernet import Fernet
 from PIL import Image
 import torch
 from ultralytics import YOLO
+from zeroconf import IPVersion, ServiceInfo
+from zeroconf.asyncio import AsyncZeroconf
 
 try:
     from .alert_logic import PedestrianAlertController
@@ -44,11 +48,52 @@ ALERT_ONE_PERSON_DWELL_SECONDS = max(0.0, float(os.getenv("ALERT_ONE_PERSON_DWEL
 ALERT_TWO_PERSON_DWELL_SECONDS = max(0.0, float(os.getenv("ALERT_TWO_PERSON_DWELL_SECONDS", "8")))
 ALERT_THREE_OR_MORE_DWELL_SECONDS = max(0.0, float(os.getenv("ALERT_THREE_OR_MORE_DWELL_SECONDS", "5")))
 HARDWARE_ALERT_ENABLED = os.getenv("HARDWARE_ALERT_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+HARDWARE_ALERT_WATCHDOG_GRACE_SECONDS = 5
 STANDBY_BEEP_DELAY_SECONDS = 1.0
 AUDIO_SOURCE_DIRECTORY = Path(__file__).with_name("source")
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="School Zone Camera Detection API")
+
+@asynccontextmanager
+async def lifespan(_app):
+    """Advertise the LAN API so ESP32 devices can find it without a typed IP address."""
+    zeroconf = None
+    service_info = None
+    if os.getenv("ESP32_DISCOVERY_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+                probe.connect(("192.0.2.1", 9))
+                address = socket.inet_aton(probe.getsockname()[0])
+            port = int(os.getenv("ESP32_DISCOVERY_PORT", "8000"))
+            service_info = ServiceInfo(
+                "_safetawid._tcp.local.",
+                "SAFETawid API._safetawid._tcp.local.",
+                addresses=[address],
+                port=port,
+                properties={"path": "/api/hardware-alert", "version": "1"},
+                server="safetawid-api.local.",
+            )
+            zeroconf = AsyncZeroconf(ip_version=IPVersion.V4Only)
+            registration = await zeroconf.async_register_service(service_info)
+            await registration
+            logger.info("Advertised SAFETawid API on %s:%d via mDNS", socket.inet_ntoa(address), port)
+        except Exception:
+            logger.exception("Could not advertise the ESP32 API with mDNS")
+            if zeroconf:
+                await zeroconf.async_close()
+                zeroconf = None
+    try:
+        yield
+    finally:
+        if zeroconf:
+            try:
+                if service_info:
+                    unregistration = await zeroconf.async_unregister_service(service_info)
+                    await unregistration
+            finally:
+                await zeroconf.async_close()
+
+app = FastAPI(title="School Zone Camera Detection API", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("FRONTEND_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","),
@@ -74,29 +119,39 @@ alert_settings = {
     "three_or_more_dwell_seconds": ALERT_THREE_OR_MORE_DWELL_SECONDS,
     "standby_beep_delay_seconds": STANDBY_BEEP_DELAY_SECONDS,
     "alert_duration_seconds": 12.0,
+    "cooldown_seconds": 10.0,
 }
 # Keep hardware delivery independent from browser audio playback acknowledgments.
 hardware_alert_active = False
 hardware_alert_deadline = None
+hardware_alert_output_deadline = None
+hardware_last_seen_at = None
+dashboard_alert_finished = False
 hardware_manual_mode = False
 
 
 def clear_hardware_alert():
-    global hardware_alert_active, hardware_alert_deadline
+    global hardware_alert_active, hardware_alert_deadline, hardware_alert_output_deadline
     hardware_alert_active = False
     hardware_alert_deadline = None
+    hardware_alert_output_deadline = None
 
 
 def activate_hardware_alert():
-    global hardware_alert_active, hardware_alert_deadline
+    global hardware_alert_active, hardware_alert_deadline, hardware_alert_output_deadline, dashboard_alert_finished
     hardware_alert_active = True
-    hardware_alert_deadline = time.monotonic() + float(alert_settings["alert_duration_seconds"])
+    dashboard_alert_finished = False
+    now = time.monotonic()
+    hardware_alert_output_deadline = now + float(alert_settings["alert_duration_seconds"])
+    hardware_connected = hardware_last_seen_at is not None and now - hardware_last_seen_at <= 3.0
+    watchdog_grace = HARDWARE_ALERT_WATCHDOG_GRACE_SECONDS if hardware_connected else 0
+    hardware_alert_deadline = hardware_alert_output_deadline + watchdog_grace
 
 
 def expire_hardware_alert_if_needed():
     if hardware_alert_active and hardware_alert_deadline is not None and time.monotonic() >= hardware_alert_deadline:
         clear_hardware_alert()
-        alert_controller.finish_alert()
+        alert_controller.finish_alert(time.monotonic())
 
 
 @app.get("/api/audio/{filename}")
@@ -113,23 +168,35 @@ def get_alert_audio(filename: str):
 @app.post("/api/alert-finished")
 def alert_finished():
     """Let the browser release the alert playback lock after audio ends or is stopped."""
+    global dashboard_alert_finished
     expire_hardware_alert_if_needed()
+    dashboard_alert_finished = True
     # When hardware delivery is enabled, wait for the MCU to acknowledge its output sequence.
     if not hardware_alert_active:
-        alert_controller.finish_alert()
+        alert_controller.finish_alert(time.monotonic())
     return {"status": "ready"}
 
 
 @app.get("/api/hardware-alert")
-def hardware_alert_status():
+def hardware_alert_status(request: Request):
     """Expose the active alert latch for an ESP32 polling over the local network."""
+    global hardware_last_seen_at
+    now = time.monotonic()
+    if request.headers.get("X-Hardware-Client") == "safetawid-esp32":
+        hardware_last_seen_at = now
     expire_hardware_alert_if_needed()
-    remaining_ms = max(0, int((hardware_alert_deadline - time.monotonic()) * 1000)) if hardware_alert_active and hardware_alert_deadline is not None else 0
+    now = time.monotonic()
+    remaining_ms = max(0, int((hardware_alert_deadline - now) * 1000)) if hardware_alert_active and hardware_alert_deadline is not None else 0
+    output_remaining_ms = max(0, int((hardware_alert_output_deadline - now) * 1000)) if hardware_alert_active and hardware_alert_output_deadline is not None else 0
+    hardware_connected = hardware_last_seen_at is not None and now - hardware_last_seen_at <= 3.0
     return {
         "active": hardware_alert_active,
         "enabled": HARDWARE_ALERT_ENABLED,
         "manual_mode": hardware_manual_mode,
         "remaining_ms": remaining_ms,
+        "duration_ms": int(float(alert_settings["alert_duration_seconds"]) * 1000),
+        "output_remaining_ms": output_remaining_ms,
+        "hardware_connected": hardware_connected,
     }
 
 
@@ -160,6 +227,7 @@ def start_manual_hardware_alert():
 def cancel_manual_hardware_alert():
     """Clear a manual hardware alert when the operator stops it from the dashboard."""
     clear_hardware_alert()
+    alert_controller.finish_alert(time.monotonic())
     return {"status": "ready"}
 
 
@@ -167,7 +235,8 @@ def cancel_manual_hardware_alert():
 def hardware_alert_finished():
     """Acknowledge that the external light/sound sequence completed."""
     clear_hardware_alert()
-    alert_controller.finish_alert()
+    if dashboard_alert_finished:
+        alert_controller.finish_alert(time.monotonic())
     return {"status": "ready"}
 
 
@@ -325,6 +394,7 @@ def apply_alert_settings():
     alert_controller.one_person_seconds = alert_settings["one_person_dwell_seconds"]
     alert_controller.two_persons_seconds = alert_settings["two_person_dwell_seconds"]
     alert_controller.three_or_more_seconds = alert_settings["three_or_more_dwell_seconds"]
+    alert_controller.cooldown_seconds = alert_settings["cooldown_seconds"]
 
 
 apply_alert_settings()
@@ -337,6 +407,7 @@ class AlertSettingsUpdate(BaseModel):
     three_or_more_dwell_seconds: float = Field(ge=0.0, le=300.0)
     standby_beep_delay_seconds: float = Field(ge=0.0, le=60.0)
     alert_duration_seconds: float = Field(ge=1.0, le=300.0)
+    cooldown_seconds: float = Field(ge=0.0, le=300.0)
 
 
 ALERT_PRESET_KEYS = {"peak-hours", "off-peak-hours"}
@@ -643,7 +714,9 @@ async def detect(request: Request):
     zone_key = None if detection_zone is None else tuple(
         detection_zone[key] for key in ("x", "y", "width", "height")
     )
-    alert_status = alert_controller.update(people_count, zone_key, time.monotonic())
+    expire_hardware_alert_if_needed()
+    detection_now = time.monotonic()
+    alert_status = alert_controller.update(people_count, zone_key, detection_now)
     if alert_status["trigger"] and HARDWARE_ALERT_ENABLED and not hardware_manual_mode:
         activate_hardware_alert()
 
@@ -676,6 +749,7 @@ async def detect(request: Request):
             "three_or_more_dwell_seconds": ALERT_THREE_OR_MORE_DWELL_SECONDS,
             "standby_beep_delay_seconds": STANDBY_BEEP_DELAY_SECONDS,
             "alert_duration_seconds": alert_settings["alert_duration_seconds"],
+            "cooldown_seconds": alert_settings["cooldown_seconds"],
         },
         "average_confidence": round(sum(item["confidence"] for item in detections) / len(detections), 1) if detections else None,
         "total_people_seen": get_people_seen(),

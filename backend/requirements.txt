@@ -3,3 +3,4 @@ uvicorn[standard]>=0.30,<1
 ultralytics>=8.3,<9
 pillow>=10,<13
 cryptography>=42
+zeroconf>=0.132,<1
