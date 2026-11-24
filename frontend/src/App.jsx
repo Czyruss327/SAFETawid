@@ -1,10 +1,10 @@
-import Cam from './components/Cam.jsx'
+import ConnectionGate from './components/ConnectionGate.jsx'
 import './App.css'
 
-// Keep the root focused on mounting the dashboard; camera and monitoring state live in Cam.
+// Check ESP32 setup connectivity before mounting the camera and monitoring dashboard.
 function App() {
   return (
-    <Cam />
+    <ConnectionGate />
   )
 }
 
