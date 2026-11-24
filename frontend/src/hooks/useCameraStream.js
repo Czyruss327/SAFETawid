@@ -9,19 +9,25 @@ const errorMessages = {
 
 /** Owns camera permission, stream lifecycle, device selection, and stale-request cancellation. */
 export default function useCameraStream() {
+  const cameraAvailable = Boolean(navigator.mediaDevices?.getUserMedia);
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const requestId = useRef(0);
-  const [status, setStatus] = useState("starting");
-  const [error, setError] = useState("");
+  const invalidatePending = useCallback(() => { requestId.current += 1; }, []);
+  const [status, setStatus] = useState(() => cameraAvailable ? "starting" : "error");
+  const [error, setError] = useState(() => cameraAvailable ? "" : "Camera access requires a recent browser on HTTPS or localhost.");
   const [cameras, setCameras] = useState([]);
   const [cameraId, setCameraId] = useState("");
 
   const releaseStream = useCallback(() => {
     // Stop every media track before dropping the stream so the camera indicator turns off promptly.
-    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current?.getTracks().forEach((track) => {
+      try { track.stop(); } catch { /* Continue releasing remaining tracks if one browser track fails. */ }
+    });
     streamRef.current = null;
-    if (videoRef.current) videoRef.current.srcObject = null;
+    if (videoRef.current) {
+      try { videoRef.current.srcObject = null; } catch { /* The media track has still been stopped. */ }
+    }
   }, []);
 
   const start = useCallback(async (deviceId = "") => {
@@ -46,13 +52,16 @@ export default function useCameraStream() {
 
       streamRef.current = stream;
       if (videoRef.current) videoRef.current.srcObject = stream;
-      const devices = await navigator.mediaDevices.enumerateDevices();
+      const devices = await navigator.mediaDevices.enumerateDevices?.() ?? [];
       if (currentRequest !== requestId.current) return;
+      const videoTrack = stream.getVideoTracks()[0];
+      if (!videoTrack) throw new Error("Camera stream did not include a video track.");
       setCameras(devices.filter((device) => device.kind === "videoinput"));
-      setCameraId(stream.getVideoTracks()[0].getSettings().deviceId ?? "");
+      setCameraId(videoTrack.getSettings().deviceId ?? "");
       setStatus("live");
     } catch (cameraError) {
       if (currentRequest !== requestId.current) return;
+      releaseStream();
       setError(errorMessages[cameraError.name] ?? `Unable to start camera (${cameraError.name}).`);
       setStatus("error");
     }
@@ -65,17 +74,17 @@ export default function useCameraStream() {
   }, [releaseStream]);
 
   useEffect(() => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setError("Camera access requires a recent browser on HTTPS or localhost.");
-      setStatus("error");
-      return undefined;
-    }
-    start("");
+    if (!cameraAvailable) return undefined;
+    let active = true;
+    Promise.resolve().then(() => {
+      if (active) void start("");
+    });
     return () => {
-      requestId.current++;
+      active = false;
+      invalidatePending();
       releaseStream();
     };
-  }, [start, releaseStream]);
+  }, [cameraAvailable, start, releaseStream, invalidatePending]);
 
   return { videoRef, status, error, cameras, cameraId, setCameraId, start, stop };
 }

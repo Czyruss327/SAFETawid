@@ -36,15 +36,18 @@ export default function CameraFeed({
   const cameraViewRef = useRef(null);
   const dragStartRef = useRef(null);
   const [draftZone, setDraftZone] = useState(null);
-  const viewWidth = frameWidth || videoRef.current?.videoWidth || 640;
-  const viewHeight = frameHeight || videoRef.current?.videoHeight || 360;
+  const [videoSize, setVideoSize] = useState({ width: 640, height: 360 });
+  const viewWidth = frameWidth || videoSize.width;
+  const viewHeight = frameHeight || videoSize.height;
 
   // Convert pointer coordinates through object-fit: contain's letterboxing so zones align with source-frame coordinates.
   const pointerToNormalized = (event) => {
-    const rect = cameraViewRef.current.getBoundingClientRect();
+    const rect = cameraViewRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return { x: 0, y: 0 };
     const video = videoRef.current;
     const sourceWidth = video?.videoWidth || viewWidth;
     const sourceHeight = video?.videoHeight || viewHeight;
+    if (sourceWidth <= 0 || sourceHeight <= 0) return { x: 0, y: 0 };
     const scale = Math.min(rect.width / sourceWidth, rect.height / sourceHeight);
     const renderedWidth = sourceWidth * scale;
     const renderedHeight = sourceHeight * scale;
@@ -107,7 +110,18 @@ export default function CameraFeed({
       </div>
 
       <div className="camera-view" ref={cameraViewRef}>
-        <video ref={videoRef} autoPlay playsInline muted className="camera-video" style={{ opacity: live ? 1 : 0 }} />
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className="camera-video"
+          style={{ opacity: live ? 1 : 0 }}
+          onLoadedMetadata={(event) => {
+            const { videoWidth: width, videoHeight: height } = event.currentTarget;
+            if (width > 0 && height > 0) setVideoSize({ width, height });
+          }}
+        />
         {live && (
           <svg
             className="camera-detection-overlay"
