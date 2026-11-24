@@ -1,16 +1,35 @@
+param(
+    [string]$RuntimeDirectory = (Join-Path $env:APPDATA "school-zone-safety-monitor-desktop\runtime"),
+    [string]$PythonExecutable = ""
+)
 $ErrorActionPreference = "Stop"
-# Create an isolated backend environment, then choose a PyTorch wheel that can actually run here.
+# Install into the user's writable app-data area; packaged app resources are read-only.
 
 $BackendDir = $PSScriptRoot
-$VenvDir = Join-Path $BackendDir ".venv"
+$RuntimeDirectory = [System.IO.Path]::GetFullPath($RuntimeDirectory)
+$VenvDir = Join-Path $RuntimeDirectory "python-env"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
+New-Item -ItemType Directory -Force -Path $RuntimeDirectory | Out-Null
 
 if (-not (Test-Path -LiteralPath $VenvPython)) {
-    $PythonCommand = Get-Command python -ErrorAction SilentlyContinue
-    if (-not $PythonCommand) {
-        throw "Python was not found. Install Python 3.11 or newer, then run this script again."
+    if ($PythonExecutable) {
+        $PythonCommand = Get-Command $PythonExecutable -ErrorAction SilentlyContinue
+        if (-not $PythonCommand -and -not (Test-Path -LiteralPath $PythonExecutable -PathType Leaf)) {
+            throw "The configured Python executable was not found: $PythonExecutable"
+        }
+        $PythonSource = if ($PythonCommand) { $PythonCommand.Source } else { $PythonExecutable }
+    } else {
+        $PythonCommand = Get-Command python -ErrorAction SilentlyContinue
+        if (-not $PythonCommand) {
+            throw "Python 3.11 or newer is required for first-time setup. Install Python, then restart the app."
+        }
+        $PythonSource = $PythonCommand.Source
     }
-    & $PythonCommand.Source -m venv $VenvDir
+    $PythonVersion = & $PythonSource -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+    if ($LASTEXITCODE -ne 0 -or [version]$PythonVersion -lt [version]"3.11") {
+        throw "Python 3.11 or newer is required. Found: $PythonVersion"
+    }
+    & $PythonSource -m venv $VenvDir
     if ($LASTEXITCODE -ne 0) { throw "Could not create the backend virtual environment." }
 }
 

@@ -28,7 +28,7 @@ The current desktop source expects Node.js and an already prepared Python enviro
 
 The desktop app wraps the existing React dashboard and Python API in an Electron window. It starts and stops the API with the app, serves the interface locally, and binds the API to `127.0.0.1` by default. It does not require a cloud service. The browser-based dashboard remains available for development.
 
-Follow [DESKTOP.md](DESKTOP.md) for setup and operator instructions. The desktop source currently expects Node.js and the prepared Python environment on the designated computer; it is not yet a standalone installer. Camera frames are processed in memory. SQLite records, encrypted telemetry key, and exports are stored in the user's application-data folder. Set the retention period in the generated `desktop-config.json` according to the UREC-approved protocol.
+Follow [DESKTOP.md](DESKTOP.md) for setup and operator instructions. Build a Windows x64 NSIS installer with `npm run package:win`. The installer provisions its Python environment on first launch, but the target computer still needs Python 3.11 or newer and internet access for package installation. Camera frames are processed in memory. SQLite records, encrypted telemetry key, and exports are stored in the user's application-data folder. Set the retention period in the generated `desktop-config.json` according to the UREC-approved protocol.
 
 ## Run the browser development version
 

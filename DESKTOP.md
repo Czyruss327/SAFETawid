@@ -6,9 +6,7 @@ The desktop shell reuses the React dashboard and FastAPI/YOLO service. Electron 
 
 1. Install Node.js 20 or newer and Python 3.11 or newer.
 2. From the project folder, run `npm install` and `npm --prefix frontend install`.
-3. Run `npm exec electron -- --version` once so Electron's Windows runtime is downloaded.
-4. Run `npm run backend:setup` once. This prepares the Python environment and selects CUDA or CPU PyTorch.
-5. Run `npm run desktop:start`. The command builds the dashboard and opens the desktop window. The YOLO model is loaded/downloaded on first inference if it is not already present.
+3. Run `npm run desktop:start`. On first launch, the app creates its Python environment under AppData, installs backend packages, and selects CUDA or CPU PyTorch. Python packages are downloaded, so first setup needs an internet connection. Development runs default to the lighter YOLO11n model; set `model` in `desktop-config.json` to `yolo11s.pt`, `yolo11m.pt`, or `yolo11l.pt` to choose another size.
 
 For development, run `npm run desktop:dev` after the frontend has been built. The desktop app binds its API to 127.0.0.1 by default and uses a random available port. It does not open a public endpoint.
 
@@ -28,8 +26,8 @@ The app creates `desktop-config.json` under the local data folder on first launc
 - `apiPort`: defaults to `8000`; the backend advertises its selected port and LAN address over mDNS when LAN access and hardware alerts are both enabled. ESP32 discovers it automatically, even if the app had to select a different port.
 - `hardwareAlertsEnabled`: defaults to `false`; set to `true` when the approved deployment calls for physical alerts.
 - `retentionDays`: set to the UREC-approved data retention period in days; zero means no automatic cleanup.
-- `pythonExecutable`: optional full path to a Python executable if it is not `backend/.venv/Scripts/python.exe`.
-- `model`: local model filename or supported Ultralytics model name.
+- `pythonExecutable`: optional full path to the Python executable used to create the AppData runtime on first launch.
+- `model`: local model filename or supported Ultralytics model name. YOLO11n is recommended for most laptops. YOLO11s, YOLO11m, and YOLO11l use progressively more memory and compute.
 - `device`: `auto` (default), `cpu`, or a CUDA device such as `cuda:0`. Use `cpu` to avoid GPU/CUDA runtime problems.
 
 Close and restart the desktop app after changing configuration. ESP32 Wi-Fi credentials are configured through its on-device setup Wi-Fi page; the backend address is discovered automatically. Dashboard alert thresholds remain editable in **Dashboard menu → Alert settings**. Hardware access exposes the backend to other devices on the local network and does not add user authentication; use it only on a trusted, access-controlled LAN.
@@ -46,4 +44,4 @@ If the GPU build still fails, set `device` to `cpu` in `desktop-config.json` to 
 
 ## Packaging
 
-This source project currently expects Node.js and the prepared Python environment on the designated computer. Producing a standalone installer with a bundled Python runtime and compatible PyTorch/CUDA libraries is a separate packaging step; it should be built and verified on the target Windows architecture and GPU environment.
+Install the npm dependencies on a Windows x64 build machine, then run `npm run package:win`. Electron Builder produces an NSIS installer under `release/`. During installation, users choose YOLO11n (recommended), YOLO11s, YOLO11m, or YOLO11l. The installer includes all four weights but keeps only the chosen weight in installed resources; first launch copies that weight to AppData. The app runs `backend/setup_backend.ps1` and writes the Python environment, database, exports, and config to the user's AppData folder. The target PC still needs Python 3.11 or newer and an internet connection for first-time Python package installation; this installer does not bundle Python or PyTorch. Unsigned builds may show a Windows SmartScreen warning. Build and launch the installer on the target PC before deployment, and verify camera access and CPU/GPU inference there.

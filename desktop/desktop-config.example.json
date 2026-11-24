@@ -4,6 +4,6 @@
   "retentionDays": 0,
   "apiPort": 8000,
   "pythonExecutable": "",
-  "model": "yolo11m.pt",
+  "model": "yolo11n.pt",
   "device": "auto"
 }

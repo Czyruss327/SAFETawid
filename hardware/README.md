@@ -17,9 +17,18 @@ Disconnect USB power before wiring.
 | GPIO 16 | Bottom pedestrian green |
 | GPIO 15 | Bottom pedestrian red |
 | GPIO 42 | Piezo positive (+) |
+| GPIO 0 (BOOT) | Optional external momentary, normally-open button to GND |
 | GND | Piezo negative (−) |
 
 At idle, GPIO 36 and 15 show pedestrian red while GPIO 37 and 17 show motorist green. When the dashboard's detection alert fires, pedestrian green (GPIO 35 and 16), motorist red (GPIO 38 and 18), dashboard sound, and the buzzer start together. The configurable **Pedestrian green + alert duration** controls how long both pedestrian green and buzzer are active. The buzzer uses short beeps throughout that same interval; during its final 3 seconds the pedestrian green and motorist red blink faster and the buzzer beeps faster. At the end, buzzer and pedestrian green stop together and the motorist green/pedestrian red phase resumes. A configurable cooldown prevents another detection alert until the selected delay passes. The firmware turns all green outputs off before changing phases to prevent conflicting green signals. Adjust `BUZZER_VOLUME_PERCENT` near the top of `src/main.cpp` from `0` (silent) to `100` (strongest PWM setting). The firmware expects a passive piezo. Use suitable current-limiting resistors or transistor drivers for the LEDs; do not power high-current loads directly from GPIO pins. Confirm your exact ESP32-S3 board exposes GPIO 42 and these other pins before wiring.
+
+### External BOOT button
+
+To access BOOT without reaching the module button, connect a momentary, normally-open pushbutton between **GPIO 0** and **GND**. It can be wired in parallel with the board's built-in BOOT button. Do not connect GPIO 0 to 3.3 V. The firmware configures GPIO 0 with an internal pull-up, so the button pulls it low only while pressed.
+
+For USB firmware upload or recovery, hold the external button while resetting or powering on the board, then release it once the serial bootloader is ready. This makes GPIO 0 low during reset, which selects the ROM download bootloader. Start the upload from PlatformIO. Exact reset/BOOT timing can vary by board; if it does not connect, hold BOOT, tap RESET/EN, then release BOOT. This button does not make uploads wireless; normal updates can use OTA as described below.
+
+While the application is running, a 3-second press on GPIO 0 still opens the Wi-Fi setup portal, matching the built-in BOOT button behavior. A short press alone does not enter the bootloader; GPIO 0 must be held low during reset for that.
 
 ## Configure and run
 

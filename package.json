@@ -8,9 +8,75 @@
     "desktop:build": "npm --prefix frontend run build",
     "desktop:start": "npm run desktop:build && electron .",
     "desktop:dev": "electron . --dev",
-    "backend:setup": "powershell -ExecutionPolicy Bypass -File backend/setup_backend.ps1"
+    "backend:setup": "powershell -ExecutionPolicy Bypass -File backend/setup_backend.ps1",
+    "package:win": "npm run desktop:build && electron-builder --win nsis"
   },
   "devDependencies": {
-    "electron": "^45.0.0"
+    "electron": "^45.0.0",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "org.safetawid.schoolzonesafety",
+    "productName": "SAFETawid School Zone Monitor",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "desktop/**/*",
+      "frontend/dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "backend",
+        "to": "backend",
+        "filter": [
+          "main.py",
+          "alert_logic.py",
+          "decrypt.py",
+          "requirements.txt",
+          "setup_backend.ps1",
+          "source/**/*"
+        ]
+      },
+      {
+        "from": "backend/yolo11m.pt",
+        "to": "models/yolo11m.pt"
+      },
+      {
+        "from": "backend/yolo11n.pt",
+        "to": "models/yolo11n.pt"
+      },
+      {
+        "from": "backend/yolo11s.pt",
+        "to": "models/yolo11s.pt"
+      },
+      {
+        "from": "backend/yolo11l.pt",
+        "to": "models/yolo11l.pt"
+      },
+      {
+        "from": "DESKTOP.md",
+        "to": "DESKTOP.md"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "include": "build/installer.nsh",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   }
 }
