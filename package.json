@@ -33,6 +33,7 @@
         "filter": [
           "main.py",
           "alert_logic.py",
+          "runtime_config.py",
           "decrypt.py",
           "requirements.txt",
           "setup_backend.ps1",
