@@ -17,6 +17,7 @@ from csv import writer
 from io import StringIO
 
 from fastapi import FastAPI, HTTPException, Request, Response
+from starlette.requests import ClientDisconnect
 from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,25 +30,30 @@ from zeroconf.asyncio import AsyncZeroconf
 
 try:
     from .alert_logic import PedestrianAlertController
+    from .runtime_config import read_bool, read_device, read_float, read_int
 except ImportError:
     from alert_logic import PedestrianAlertController
+    from runtime_config import read_bool, read_device, read_float, read_int
 
 
 # Runtime settings are environment driven so the same API can run on CPU-only and CUDA hosts.
 MODEL_PATH = os.getenv("YOLO_MODEL", "yolo11m.pt")
-DEVICE_SETTING = os.getenv("YOLO_DEVICE", "auto").strip().lower()
-IMAGE_SIZE = int(os.getenv("YOLO_IMAGE_SIZE", "416"))
-CONFIDENCE_THRESHOLD = float(os.getenv("DETECTION_CONFIDENCE", "0.65"))
+if not MODEL_PATH.strip():
+    raise RuntimeError("YOLO_MODEL must be a non-empty model name or path.")
+DEVICE_SETTING = read_device("YOLO_DEVICE")
+IMAGE_SIZE = read_int("YOLO_IMAGE_SIZE", 416, minimum=32, maximum=2048)
+CONFIDENCE_THRESHOLD = read_float("DETECTION_CONFIDENCE", 0.65, minimum=0.0, maximum=1.0)
 TELEMETRY_ENCRYPTION_KEY = os.getenv("TELEMETRY_ENCRYPTION_KEY", "").strip()
 TELEMETRY_KEY_PATH = Path(os.getenv("TELEMETRY_KEY_PATH", Path(__file__).with_name("telemetry.key")))
 MAX_FRAME_BYTES = 8 * 1024 * 1024
+MAX_FRAME_PIXELS = 20_000_000
 DATABASE_PATH = Path(os.getenv("DATABASE_PATH", Path(__file__).with_name("school_zone.db")))
 EXPORT_DIRECTORY = Path(os.getenv("EXPORT_DIRECTORY", Path(__file__).with_name("export")))
-DATA_RETENTION_DAYS = max(0, int(os.getenv("DATA_RETENTION_DAYS", "0")))
-ALERT_ONE_PERSON_DWELL_SECONDS = max(0.0, float(os.getenv("ALERT_ONE_PERSON_DWELL_SECONDS", "12")))
-ALERT_TWO_PERSON_DWELL_SECONDS = max(0.0, float(os.getenv("ALERT_TWO_PERSON_DWELL_SECONDS", "8")))
-ALERT_THREE_OR_MORE_DWELL_SECONDS = max(0.0, float(os.getenv("ALERT_THREE_OR_MORE_DWELL_SECONDS", "5")))
-HARDWARE_ALERT_ENABLED = os.getenv("HARDWARE_ALERT_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+DATA_RETENTION_DAYS = read_int("DATA_RETENTION_DAYS", 0, minimum=0)
+ALERT_ONE_PERSON_DWELL_SECONDS = read_float("ALERT_ONE_PERSON_DWELL_SECONDS", 12, minimum=0.0, maximum=300.0)
+ALERT_TWO_PERSON_DWELL_SECONDS = read_float("ALERT_TWO_PERSON_DWELL_SECONDS", 8, minimum=0.0, maximum=300.0)
+ALERT_THREE_OR_MORE_DWELL_SECONDS = read_float("ALERT_THREE_OR_MORE_DWELL_SECONDS", 5, minimum=0.0, maximum=300.0)
+HARDWARE_ALERT_ENABLED = read_bool("HARDWARE_ALERT_ENABLED")
 HARDWARE_ALERT_WATCHDOG_GRACE_SECONDS = 5
 STANDBY_BEEP_DELAY_SECONDS = 1.0
 AUDIO_SOURCE_DIRECTORY = Path(__file__).with_name("source")
@@ -59,12 +65,12 @@ async def lifespan(_app):
     """Advertise the LAN API so ESP32 devices can find it without a typed IP address."""
     zeroconf = None
     service_info = None
-    if os.getenv("ESP32_DISCOVERY_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
+    if read_bool("ESP32_DISCOVERY_ENABLED"):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
                 probe.connect(("192.0.2.1", 9))
                 address = socket.inet_aton(probe.getsockname()[0])
-            port = int(os.getenv("ESP32_DISCOVERY_PORT", "8000"))
+            port = read_int("ESP32_DISCOVERY_PORT", 8000, minimum=1, maximum=65535)
             service_info = ServiceInfo(
                 "_safetawid._tcp.local.",
                 "SAFETawid API._safetawid._tcp.local.",
@@ -94,9 +100,12 @@ async def lifespan(_app):
                 await zeroconf.async_close()
 
 app = FastAPI(title="School Zone Camera Detection API", lifespan=lifespan)
+frontend_origins = [origin.strip() for origin in os.getenv(
+    "FRONTEND_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+).split(",") if origin.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("FRONTEND_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","),
+    allow_origins=frontend_origins,
     allow_methods=["GET", "POST", "PUT"],
     allow_headers=["*"],
 )
@@ -536,7 +545,7 @@ def parse_detection_zone(value):
         parsed = []
         for zone in zones:
             x, y, width, height = (zone[key] for key in ("x", "y", "width", "height"))
-            if not all(isinstance(item, (int, float)) and math.isfinite(item) for item in (x, y, width, height)):
+            if not all(isinstance(item, (int, float)) and not isinstance(item, bool) and math.isfinite(item) for item in (x, y, width, height)):
                 raise ValueError("Zone coordinates must be finite numbers.")
             if x < 0 or y < 0 or width <= 0 or height <= 0 or x + width > 1 or y + height > 1:
                 raise ValueError("Zone must be a non-empty rectangle inside the camera frame.")
@@ -649,13 +658,35 @@ async def detect(request: Request):
     """Decode one JPEG/PNG frame, run person detection, persist metrics, and return overlay data."""
     global hardware_alert_active, person_was_present
     request_started_at = time.perf_counter()
-    image_bytes = await request.body()
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > MAX_FRAME_BYTES:
+                raise HTTPException(status_code=413, detail="Camera frame is too large.")
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="Invalid Content-Length header.") from error
+    image_parts = []
+    image_size = 0
+    try:
+        async for part in request.stream():
+            image_size += len(part)
+            if image_size > MAX_FRAME_BYTES:
+                raise HTTPException(status_code=413, detail="Camera frame is too large.")
+            image_parts.append(part)
+    except ClientDisconnect as error:
+        raise HTTPException(status_code=400, detail="Camera frame upload ended before completion.") from error
+    image_bytes = b"".join(image_parts)
     if not image_bytes:
         raise HTTPException(status_code=400, detail="No camera frame was provided.")
-    if len(image_bytes) > MAX_FRAME_BYTES:
-        raise HTTPException(status_code=413, detail="Camera frame is too large.")
     try:
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        with Image.open(io.BytesIO(image_bytes)) as source_image:
+            if source_image.format not in {"JPEG", "PNG"}:
+                raise HTTPException(status_code=415, detail="Camera frame must be JPEG or PNG.")
+            if source_image.width <= 0 or source_image.height <= 0 or source_image.width * source_image.height > MAX_FRAME_PIXELS:
+                raise HTTPException(status_code=413, detail="Camera image dimensions are too large.")
+            image = source_image.convert("RGB")
+    except HTTPException:
+        raise
     except Exception as error:
         raise HTTPException(status_code=400, detail="Frame must be a valid JPEG or PNG image.") from error
     detection_zone = parse_detection_zone(request.headers.get("x-detection-zone"))
