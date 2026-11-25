@@ -15,8 +15,8 @@ constexpr uint8_t PEDESTRIAN_TOP_GREEN_PIN = 35;
 constexpr uint8_t PEDESTRIAN_TOP_RED_PIN = 36;
 constexpr uint8_t VEHICLE_TOP_RED_PIN = 38;
 constexpr uint8_t VEHICLE_TOP_GREEN_PIN = 37;
-constexpr uint8_t VEHICLE_BOTTOM_RED_PIN = 18;
-constexpr uint8_t VEHICLE_BOTTOM_GREEN_PIN = 17;
+constexpr uint8_t VEHICLE_BOTTOM_RED_PIN = 17;
+constexpr uint8_t VEHICLE_BOTTOM_GREEN_PIN = 18;
 constexpr uint8_t PEDESTRIAN_BOTTOM_RED_PIN = 15;
 constexpr uint8_t PEDESTRIAN_BOTTOM_GREEN_PIN = 16;
 constexpr uint8_t BUZZER_PIN = 42;
@@ -32,7 +32,7 @@ constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 30000;
 constexpr uint32_t BACKEND_DISCOVERY_RETRY_MS = 10000;
 constexpr uint32_t FINAL_FAST_PHASE_MS = 3000;
 constexpr uint32_t SIGNAL_BLINK_STEP_MS = 125;
-constexpr uint32_t NORMAL_BEEP_INTERVAL_MS = 1000;
+constexpr uint32_t NORMAL_BEEP_INTERVAL_MS = 500;
 constexpr uint32_t BEEP_PULSE_MS = 100;
 
 bool alertActive = false;
@@ -195,7 +195,7 @@ void beginAlert(uint32_t durationMs) {
   alertActive = true;
   backendAlert = true;
   alertStartedAt = millis();
-  alertDurationMs = max<uint32_t>(1, durationMs);
+  alertDurationMs = durationMs;
   lastSignalBlinkAt = alertStartedAt;
   lastBuzzerBeepAt = alertStartedAt;
   buzzerPulseActive = true;
@@ -249,6 +249,7 @@ void pollBackend() {
     lastBackendFailureStatus = 0;
     const String body = http.getString();
     const bool activeOnServer = body.indexOf("\"active\":true") >= 0;
+    const bool manualAlertOnServer = body.indexOf("\"manual_alert\":true") >= 0;
     if (activeOnServer && !alertActive) {
       const int outputRemainingKey = body.indexOf("\"output_remaining_ms\":");
       uint32_t outputDurationMs = 12000;
@@ -269,7 +270,9 @@ void pollBackend() {
           }
         }
       }
-      if (outputDurationMs > 0) {
+      if (manualAlertOnServer) {
+        beginAlert(0);
+      } else if (outputDurationMs > 0) {
         beginAlert(outputDurationMs);
       } else {
         Serial.println("Hardware alert output interval already elapsed; acknowledging stale alert.");
@@ -337,10 +340,10 @@ void updateOutputs() {
   }
 
   const uint32_t elapsed = now - alertStartedAt;
-  const uint32_t fastPhaseDuration = min<uint32_t>(FINAL_FAST_PHASE_MS, alertDurationMs);
+  const uint32_t fastPhaseDuration = alertDurationMs == 0 ? 0 : min<uint32_t>(FINAL_FAST_PHASE_MS, alertDurationMs);
   const uint32_t fastPhaseStartsAt = alertDurationMs - fastPhaseDuration;
-  const bool fastPhase = elapsed >= fastPhaseStartsAt;
-  if (elapsed >= alertDurationMs) {
+  const bool fastPhase = alertDurationMs > 0 && elapsed >= fastPhaseStartsAt;
+  if (alertDurationMs > 0 && elapsed >= alertDurationMs) {
     const bool shouldAcknowledge = backendAlert;
     stopAlert();
     if (shouldAcknowledge) acknowledgeBackendAlert();

@@ -103,8 +103,9 @@ export default function AIRecognitionPanel({
           <i aria-hidden="true" />{manualAlertActive ? "Alert active" : "Idle · red light"}
         </div>
         <div className="manual-alert-buttons">
-          <button type="button" className="manual-alert-start" onClick={onManualAlertStart} disabled={manualAlertActive}>Red · Trigger</button>
-          <button type="button" className="manual-alert-stop" onClick={onManualAlertStop} disabled={!manualAlertActive}>Green · Stop</button>
+          <button type="button" className={manualAlertActive ? "manual-alert-stop" : "manual-alert-start"} onClick={manualAlertActive ? onManualAlertStop : onManualAlertStart}>
+            {manualAlertActive ? "Green · Stop alert" : "Red · Start alert"}
+          </button>
         </div>
       </div>}
       {manualMode && manualAlertStatus && <p className="manual-alert-status" role="status">{manualAlertStatus}</p>}

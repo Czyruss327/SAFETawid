@@ -137,18 +137,21 @@ hardware_alert_output_deadline = None
 hardware_last_seen_at = None
 dashboard_alert_finished = False
 hardware_manual_mode = False
+hardware_alert_manual_latched = False
 
 
 def clear_hardware_alert():
-    global hardware_alert_active, hardware_alert_deadline, hardware_alert_output_deadline
+    global hardware_alert_active, hardware_alert_deadline, hardware_alert_output_deadline, hardware_alert_manual_latched
     hardware_alert_active = False
     hardware_alert_deadline = None
     hardware_alert_output_deadline = None
+    hardware_alert_manual_latched = False
 
 
 def activate_hardware_alert():
-    global hardware_alert_active, hardware_alert_deadline, hardware_alert_output_deadline, dashboard_alert_finished
+    global hardware_alert_active, hardware_alert_deadline, hardware_alert_output_deadline, dashboard_alert_finished, hardware_alert_manual_latched
     hardware_alert_active = True
+    hardware_alert_manual_latched = False
     dashboard_alert_finished = False
     now = time.monotonic()
     hardware_alert_output_deadline = now + float(alert_settings["alert_duration_seconds"])
@@ -202,6 +205,7 @@ def hardware_alert_status(request: Request):
         "active": hardware_alert_active,
         "enabled": HARDWARE_ALERT_ENABLED,
         "manual_mode": hardware_manual_mode,
+        "manual_alert": hardware_alert_manual_latched,
         "remaining_ms": remaining_ms,
         "duration_ms": int(float(alert_settings["alert_duration_seconds"]) * 1000),
         "output_remaining_ms": output_remaining_ms,
@@ -228,8 +232,13 @@ def start_manual_hardware_alert():
     """Latch a manual dashboard alert for the ESP32 to pick up on its next poll."""
     if not HARDWARE_ALERT_ENABLED:
         raise HTTPException(status_code=503, detail="Hardware alerts are disabled on the backend.")
-    activate_hardware_alert()
-    return {"status": "active", "duration_seconds": alert_settings["alert_duration_seconds"]}
+    global hardware_alert_active, hardware_alert_deadline, hardware_alert_output_deadline, dashboard_alert_finished, hardware_alert_manual_latched
+    hardware_alert_active = True
+    hardware_alert_deadline = None
+    hardware_alert_output_deadline = None
+    dashboard_alert_finished = False
+    hardware_alert_manual_latched = True
+    return {"status": "active", "manual": True}
 
 
 @app.post("/api/hardware-alert/cancel")

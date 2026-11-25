@@ -274,6 +274,10 @@ export default function Cam() {
   });
 
   const startManualAlert = () => {
+    if (manualHardwareAlertRef.current || alertPlayingRef.current) {
+      stopAlertSound();
+      return;
+    }
     standbyWantedRef.current = false;
     stopStandbySound();
     const requestId = ++manualAlertRequestRef.current;
@@ -281,15 +285,7 @@ export default function Cam() {
     setManualAlertActive(true);
     setManualAlertStatus("Sending manual alert to the hardware…");
     // Start browser playback directly from the click so browser audio permission is preserved.
-    const durationMs = Math.max(1000, alertDurationRef.current * 1000);
-    void playAlertSound(true, durationMs / 1000);
-    if (manualAlertTimerRef.current) window.clearTimeout(manualAlertTimerRef.current);
-    manualAlertTimerRef.current = window.setTimeout(() => {
-      manualHardwareAlertRef.current = false;
-      setManualAlertActive(false);
-      setManualAlertStatus("Manual alert completed.");
-      manualAlertTimerRef.current = null;
-    }, durationMs);
+    void playAlertSound(true);
     fetch(apiUrl("/api/hardware-alert/manual"), { method: "POST" })
       .then(async (response) => {
         if (!response.ok) {
@@ -307,9 +303,7 @@ export default function Cam() {
       .catch((error) => {
         if (requestId === manualAlertRequestRef.current) {
           manualHardwareAlertRef.current = false;
-          if (manualAlertTimerRef.current) window.clearTimeout(manualAlertTimerRef.current);
-          manualAlertTimerRef.current = null;
-          setManualAlertActive(alertPlayingRef.current);
+          stopAlertSound();
           setManualAlertStatus(error.message || "Could not reach the hardware alert service.");
         }
       });
