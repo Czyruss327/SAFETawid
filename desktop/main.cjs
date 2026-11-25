@@ -47,12 +47,40 @@ function loadConfig() {
     device: "auto",
   };
   try {
-    return { ...defaults, ...JSON.parse(fs.readFileSync(configFile, "utf8")) };
+    const parsed = JSON.parse(fs.readFileSync(configFile, "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Configuration must contain a JSON object.");
+    }
+    const config = { ...defaults, ...parsed };
+    for (const key of ["allowEsp32LanAccess", "hardwareAlertsEnabled"]) {
+      if (typeof config[key] !== "boolean") throw new Error(`${key} must be true or false.`);
+    }
+    if (!Number.isInteger(config.apiPort) || config.apiPort < 1024 || config.apiPort > 65535) {
+      throw new Error("apiPort must be an integer from 1024 to 65535.");
+    }
+    if (!Number.isInteger(config.retentionDays) || config.retentionDays < 0) {
+      throw new Error("retentionDays must be a non-negative whole number.");
+    }
+    for (const key of ["pythonExecutable", "model", "device"]) {
+      if (typeof config[key] !== "string" || (key !== "pythonExecutable" && !config[key].trim())) {
+        throw new Error(`${key} must be ${key === "pythonExecutable" ? "a string" : "a non-empty string"}.`);
+      }
+    }
+    if (config.device !== "auto" && config.device !== "cpu"
+      && !/^cuda(?::[0-9]+)?$/.test(config.device) && !/^[0-9]+$/.test(config.device)) {
+      throw new Error("device must be auto, cpu, or a CUDA device index.");
+    }
+    return config;
   } catch (error) {
-    if (error.code !== "ENOENT") throw new Error(`Could not read desktop configuration at ${configFile}: ${error.message}`);
-    fs.mkdirSync(path.dirname(configFile), { recursive: true });
-    fs.writeFileSync(configFile, `${JSON.stringify(defaults, null, 2)}\n`, { flag: "wx" });
-    return defaults;
+    if (error.code === "ENOENT") {
+      fs.mkdirSync(path.dirname(configFile), { recursive: true });
+      fs.writeFileSync(configFile, `${JSON.stringify(defaults, null, 2)}\n`, { flag: "wx" });
+      return defaults;
+    }
+    if (error.code !== undefined && error.code !== "ENOENT") {
+      throw new Error(`Could not read desktop configuration at ${configFile}: ${error.message}`);
+    }
+    throw new Error(`Invalid desktop configuration at ${configFile}: ${error.message}`);
   }
 }
 
@@ -69,7 +97,7 @@ function choosePort(host, requestedPort) {
 
 function backendDependenciesReady(python) {
   try {
-    execFileSync(python, ["-c", "import fastapi, uvicorn, ultralytics, torch"], { stdio: "ignore", timeout: 60000, windowsHide: true });
+    execFileSync(python, ["-c", "import fastapi, uvicorn, ultralytics, torch, cryptography, zeroconf; from PIL import Image"], { stdio: "ignore", timeout: 180000, windowsHide: true });
     return true;
   } catch {
     return false;
@@ -128,7 +156,17 @@ function resolveModel(config) {
   const configuredModel = config.model || "yolo11n.pt";
   if (path.isAbsolute(configuredModel)) return configuredModel;
   const modelPath = path.resolve(modelDirectory, configuredModel);
-  if (!modelPath.startsWith(`${modelDirectory}${path.sep}`)) throw new Error("The configured model path must stay inside the AppData models folder or be an absolute path.");
+  const pathFromModelDirectory = path.relative(modelDirectory, modelPath);
+  if (pathFromModelDirectory === ".." || pathFromModelDirectory.startsWith(`..${path.sep}`) || path.isAbsolute(pathFromModelDirectory)) {
+    throw new Error("The configured model path must stay inside the AppData models folder or be an absolute path.");
+  }
+  const modelName = path.basename(configuredModel);
+  if (configuredModel === modelName && Object.hasOwn(BUNDLED_MODEL_HASHES, modelName)
+    && !fs.existsSync(path.join(resourceRoot, "models", modelName)) && !fs.existsSync(modelPath)) {
+    // Model weights are optional at packaging time. Ultralytics can download the named official weight
+    // into modelDirectory on first inference when no local or bundled copy is available.
+    return modelName;
+  }
   return modelPath;
 }
 
@@ -138,13 +176,16 @@ function ensureBundledModel(config) {
   const expectedHash = BUNDLED_MODEL_HASHES[modelName];
   if (!expectedHash) return;
   const target = resolveModel(config);
+  const packagedModel = path.join(resourceRoot, "models", modelName);
+  if (!fs.existsSync(packagedModel)) {
+    // Keep an existing local copy; otherwise let YOLO download this official weight on first use.
+    return;
+  }
   if (fs.existsSync(target)) {
     const currentHash = crypto.createHash("sha256").update(fs.readFileSync(target)).digest("hex");
     if (currentHash === expectedHash) return;
     fs.rmSync(target, { force: true });
   }
-  const packagedModel = path.join(resourceRoot, "models", modelName);
-  if (!fs.existsSync(packagedModel)) throw new Error(`The packaged YOLO model is missing: ${packagedModel}`);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const temporaryModel = `${target}.part`;
   fs.copyFileSync(packagedModel, temporaryModel);
@@ -190,31 +231,52 @@ function startBackend(config, python) {
 function serveAndProxy() {
   const distRoot = path.join(frontendRoot, "dist");
   apiServer = http.createServer((request, response) => {
-    const target = new URL(request.url, `http://127.0.0.1:${uiPort}`);
-    if (target.pathname.startsWith("/api/")) {
-      const proxy = http.request({ hostname: "127.0.0.1", port: apiPort, path: `${target.pathname}${target.search}`, method: request.method, headers: { ...request.headers, host: `127.0.0.1:${apiPort}` } }, (upstream) => {
-        response.writeHead(upstream.statusCode || 502, upstream.headers);
-        upstream.pipe(response);
-      });
-      proxy.on("error", () => { response.writeHead(503); response.end("Local detection service is unavailable."); });
-      request.pipe(proxy);
-      return;
-    }
-    const relative = decodeURIComponent(target.pathname === "/" ? "/index.html" : target.pathname);
-    const filePath = path.resolve(distRoot, `.${relative}`);
-    if (!filePath.startsWith(`${distRoot}${path.sep}`) && filePath !== path.join(distRoot, "index.html")) {
-      response.writeHead(403); response.end("Forbidden"); return;
-    }
-    fs.readFile(filePath, (error, content) => {
-      if (error) { response.writeHead(404); response.end("Not found"); return; }
-      const mime = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".webmanifest": "application/manifest+json", ".mp3": "audio/mpeg" }[path.extname(filePath)] || "application/octet-stream";
-      response.writeHead(200, { "Content-Type": mime, "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store" });
-      if (path.basename(filePath) === "index.html") {
-        response.end(content.toString("utf8").replace("</head>", "<script>window.__SCHOOL_ZONE_DESKTOP__=true</script></head>"));
-      } else {
-        response.end(content);
+    try {
+      const target = new URL(request.url, `http://127.0.0.1:${uiPort}`);
+      if (target.pathname.startsWith("/api/")) {
+        const proxy = http.request({ hostname: "127.0.0.1", port: apiPort, path: `${target.pathname}${target.search}`, method: request.method, headers: { ...request.headers, host: `127.0.0.1:${apiPort}` } }, (upstream) => {
+          response.writeHead(upstream.statusCode || 502, upstream.headers);
+          upstream.on("error", () => response.destroy());
+          upstream.pipe(response);
+        });
+        proxy.on("error", () => {
+          if (response.headersSent) {
+            response.destroy();
+          } else {
+            response.writeHead(503, { "Content-Type": "text/plain; charset=utf-8" });
+            response.end("Local detection service is unavailable.");
+          }
+        });
+        request.on("error", () => proxy.destroy());
+        request.pipe(proxy);
+        return;
       }
-    });
+      let relative;
+      try {
+        relative = decodeURIComponent(target.pathname === "/" ? "/index.html" : target.pathname);
+      } catch {
+        response.writeHead(400); response.end("Malformed URL"); return;
+      }
+      const filePath = path.resolve(distRoot, `.${relative}`);
+      const pathFromRoot = path.relative(distRoot, filePath);
+      if (pathFromRoot === ".." || pathFromRoot.startsWith(`..${path.sep}`) || path.isAbsolute(pathFromRoot)) {
+        response.writeHead(403); response.end("Forbidden"); return;
+      }
+      fs.readFile(filePath, (error, content) => {
+        if (error) { response.writeHead(error.code === "ENOENT" ? 404 : 500); response.end(error.code === "ENOENT" ? "Not found" : "Could not read application asset"); return; }
+        const mime = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".webmanifest": "application/manifest+json", ".mp3": "audio/mpeg" }[path.extname(filePath)] || "application/octet-stream";
+        response.writeHead(200, { "Content-Type": mime, "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store" });
+        if (path.basename(filePath) === "index.html") {
+          response.end(content.toString("utf8").replace("</head>", "<script>window.__SCHOOL_ZONE_DESKTOP__=true</script></head>"));
+        } else {
+          response.end(content);
+        }
+      });
+    } catch (error) {
+      console.error("Could not handle desktop UI request:", error);
+      if (!response.headersSent) response.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+      response.end("Invalid request.");
+    }
   });
   return new Promise((resolve, reject) => {
     apiServer.once("error", reject);
@@ -232,10 +294,12 @@ function createWindow() {
     backgroundColor: "#f5f8fb",
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
-  windowRef.loadURL(`http://127.0.0.1:${uiPort}/`);
+  windowRef.loadURL(`http://127.0.0.1:${uiPort}/`).catch((error) => {
+    showStartupError(`Could not load the dashboard: ${error.message}`);
+  });
   windowRef.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("http://127.0.0.1:")) return { action: "allow" };
-    shell.openExternal(url);
+    shell.openExternal(url).catch((error) => console.error("Could not open external link:", error));
     return { action: "deny" };
   });
   windowRef.on("closed", () => { windowRef = null; });
@@ -243,7 +307,13 @@ function createWindow() {
 
 async function showStartupError(message) {
   if (shuttingDown) return;
-  await dialog.showMessageBox({ type: "error", title: "School Zone Safety Monitor", message, detail: `Setup guide: ${path.join(resourceRoot, "DESKTOP.md")}` });
+  try {
+    await dialog.showMessageBox({ type: "error", title: "School Zone Safety Monitor", message, detail: `Setup guide: ${path.join(resourceRoot, "DESKTOP.md")}` });
+  } catch (error) {
+    console.error("Could not display startup error:", error);
+  } finally {
+    app.quit();
+  }
 }
 
 app.whenReady().then(async () => {
@@ -267,8 +337,8 @@ app.whenReady().then(async () => {
 
 Menu.setApplicationMenu(Menu.buildFromTemplate([
   { label: "App", submenu: [
-    { label: "Open local data folder", click: () => shell.openPath(app.getPath("userData")) },
-    { label: "Open desktop configuration", click: () => shell.openPath(configFile) },
+    { label: "Open local data folder", click: () => shell.openPath(app.getPath("userData")).catch((error) => console.error("Could not open local data folder:", error)) },
+    { label: "Open desktop configuration", click: () => shell.openPath(configFile).catch((error) => console.error("Could not open desktop configuration:", error)) },
     { type: "separator" }, { role: "quit" },
   ] },
 ]));

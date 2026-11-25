@@ -37,6 +37,8 @@ export default function Cam() {
   const menuRef = useRef(null);
   const standbyTimerRef = useRef(null);
   const standbyAudioRef = useRef(null);
+  const playAlertSoundRef = useRef(null);
+  const startStandbySoundRef = useRef(null);
   const standbyPlayingRef = useRef(false);
   const standbyGenerationRef = useRef(0);
   const standbyWantedRef = useRef(false);
@@ -115,15 +117,13 @@ export default function Cam() {
 
   useEffect(() => {
     const screenQuery = window.matchMedia("(min-width: 1200px)");
-    const updateLayout = (event) => setWideScreen(event.matches);
-    setWideScreen(screenQuery.matches);
+    const updateLayout = (event) => {
+      setWideScreen(event.matches);
+      if (event.matches) setActivePanel(null);
+    };
     screenQuery.addEventListener("change", updateLayout);
     return () => screenQuery.removeEventListener("change", updateLayout);
   }, []);
-
-  useEffect(() => {
-    if (wideScreen) setActivePanel(null);
-  }, [wideScreen]);
 
   useEffect(() => {
     if (!activePanel && !menuOpen) return undefined;
@@ -268,6 +268,11 @@ export default function Cam() {
     }
   };
 
+  useEffect(() => {
+    playAlertSoundRef.current = playAlertSound;
+    startStandbySoundRef.current = startStandbySound;
+  });
+
   const startManualAlert = () => {
     standbyWantedRef.current = false;
     stopStandbySound();
@@ -313,10 +318,6 @@ export default function Cam() {
   useEffect(() => {
     try { window.localStorage.setItem(ALERT_SOUND_STORAGE_KEY, String(soundEnabled)); }
     catch { /* Sound preference still applies for this session. */ }
-    if (!soundEnabled) {
-      stopStandbySound();
-      stopAlertSound();
-    }
   }, [soundEnabled]);
 
   useEffect(() => {
@@ -374,7 +375,7 @@ export default function Cam() {
         if (window.localStorage.getItem(LAST_SCHEDULED_ALERT_STORAGE_KEY) === today) return;
       } catch { /* Keep an in-memory guard when browser storage is unavailable. */ }
       lastAttemptAt = now.getTime();
-      void playAlertSound().then((played) => {
+      void playAlertSoundRef.current().then((played) => {
         if (played) {
           firedToday = true;
           try { window.localStorage.setItem(LAST_SCHEDULED_ALERT_STORAGE_KEY, today); }
@@ -402,7 +403,6 @@ export default function Cam() {
   useEffect(() => {
     const video = camera.videoRef.current;
     if (camera.status !== "live" || !video) {
-      setCameraFps(0);
       return undefined;
     }
 
@@ -520,9 +520,9 @@ export default function Cam() {
           stopStandbySound();
           if (data.alert_trigger) fetch(apiUrl("/api/alert-finished"), { method: "POST" }).catch(() => {});
         } else if (data.alert_trigger) {
-          void playAlertSound(false, alertDurationRef.current);
+          void playAlertSoundRef.current(false, alertDurationRef.current);
         } else if (standbyWantedRef.current) {
-          startStandbySound(settings.standby_beep_delay_seconds || 3);
+          startStandbySoundRef.current(settings.standby_beep_delay_seconds || 3);
         } else {
           stopStandbySound();
         }
@@ -609,7 +609,14 @@ export default function Cam() {
               aria-label={`Alert sound ${soundEnabled ? "on" : "off"}`}
               aria-pressed={soundEnabled}
               title={`Turn alert sound ${soundEnabled ? "off" : "on"}`}
-              onClick={() => setSoundEnabled((enabled) => !enabled)}
+              onClick={() => {
+                if (soundEnabled) {
+                  standbyWantedRef.current = false;
+                  stopStandbySound();
+                  stopAlertSound();
+                }
+                setSoundEnabled((enabled) => !enabled);
+              }}
             >
               <Icon name={soundEnabled ? "volume" : "muted"} size={15} />
               <span>Sound {soundEnabled ? "on" : "off"}</span>
@@ -664,7 +671,7 @@ export default function Cam() {
                 startStandbySound(standbyDelayRef.current);
                 camera.start(camera.cameraId);
               }}
-              onStop={() => { standbyWantedRef.current = false; stopStandbySound(); stopAlertSound(); camera.stop(); }}
+              onStop={() => { standbyWantedRef.current = false; stopStandbySound(); stopAlertSound(); setCameraFps(0); camera.stop(); }}
               clock={clock}
               detections={result?.detections ?? []}
               frameWidth={result?.frame_width}

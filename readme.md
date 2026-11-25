@@ -1,5 +1,7 @@
 # School Zone Safety Monitor
 
+For a codebase-oriented architecture guide and agent onboarding map, see [PROJECT_MAP.md](PROJECT_MAP.md).
+
 The React dashboard keeps the browser camera preview local and sends sampled frames to a Python API for YOLO person detection. The API returns detection boxes and live metrics; React draws the boxes over the live preview instead of downloading a new annotated image for every result.
 
 ## Local-first desktop application
