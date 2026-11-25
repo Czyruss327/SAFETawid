@@ -43,7 +43,7 @@ These files support normal builds, documented workflows, or system behavior:
 | `frontend/` | `package.json`, `package-lock.json` | The actual Vite/React package and its pinned dependencies. Keep this lockfile; it is separate from the root lockfile. |
 | `frontend/` | `vite.config.js`, `eslint.config.js`, `index.html` | Frontend development server, lint rules, and browser entry document. |
 | `frontend/src/` | `main.jsx`, `App.jsx`, `api.js`, `App.css`, `index.css` | React startup, root component, API URL selection, and styles. |
-| `frontend/src/components/` | `Cam.jsx`, `CameraFeed.jsx`, `ConnectionGate.jsx`, `useCameraStream.js` | Main dashboard orchestration, camera view, setup gate, and camera lifecycle. |
+| `frontend/src/components/` | `Cam.jsx`, `CameraFeed.jsx`, `HardwareAlertNote.jsx`, `useCameraStream.js` | Main dashboard orchestration, camera view, device setup status, and camera lifecycle. |
 | `frontend/src/components/` | `AIRecognitionPanel.jsx`, `AlertSettingsPanel.jsx`, `HardwareAlertNote.jsx`, `RecentDetectionsPanel.jsx`, `PerformanceDashboard.jsx` | Dashboard status, settings, hardware state, events, and metrics UI. |
 | `frontend/src/components/` | `ClockBadge.jsx`, `Footer.jsx`, `Icon.jsx` | Shared display components and the app’s icon system. |
 | `frontend/public/` | `favicon.svg`, `pwa-icon.svg`, `manifest.webmanifest`, `service-worker.js` | Browser/PWA icons, install metadata, and offline app-shell caching. These are referenced by the HTML, manifest, or service-worker registration. |

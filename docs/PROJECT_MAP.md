@@ -37,7 +37,7 @@ The system does not send camera frames to a cloud service in its local desktop/b
     public/                    PWA manifest, service worker, icons
     src/
       main.jsx                 React bootstrap and browser service-worker setup
-      App.jsx                  Root view; mounts ConnectionGate
+      App.jsx                  Root view; mounts Cam
       api.js                   API origin selection/helper
       components/Cam.jsx       Dashboard state, sampling, API orchestration, alerts
       components/*.jsx         Dashboard panels, camera feed, settings, status
@@ -86,7 +86,7 @@ Do not confuse two alert state stores: alert thresholds/duration/cooldown persis
 
 1. Start backend from `backend` with `uvicorn main:app --reload --host 127.0.0.1 --port 8000`.
 2. Start Vite from `frontend`; its `/api` proxy forwards to `127.0.0.1:8000`.
-3. `main.jsx` mounts `App`; `App` mounts `ConnectionGate`. The gate checks the ESP32 setup portal and only then mounts `Cam` (the setup-complete flag is stored locally).
+3. `main.jsx` mounts `App`, which renders `Cam`. The dashboard's **Device setup** panel checks the ESP32 setup portal and backend heartbeat without gating dashboard access.
 4. `useCameraStream` opens the selected camera with `getUserMedia`, enumerates video devices, and stops tracks on cleanup.
 5. `Cam` draws the latest video frame to a canvas, scales it to at most 640 px wide, encodes JPEG quality 0.78 and submits one request at a time. A 5 ms interval is a sampling check, not a 200 FPS inference guarantee: an in-flight request suppresses further samples.
 6. `Cam` updates event/performance state and overlays response boxes over the original video. The browser owns audio playback and sends `/api/alert-finished` when appropriate.
@@ -154,7 +154,7 @@ Direct commands and guides:
 
 ## 8. Frontend component responsibilities
 
-- `ConnectionGate.jsx`: ESP32 setup-network gate and setup portal link.
+- `HardwareAlertNote.jsx`: ESP32 setup-network detection, Wi-Fi setup link, and backend heartbeat status inside the Device setup panel.
 - `Cam.jsx`: dashboard composition and the orchestration center; browser preferences, frame sampling, alert audio/schedule/manual controls, metrics, events, settings panels.
 - `useCameraStream.js`: browser camera lifecycle, device enumeration, error mapping.
 - `CameraFeed.jsx`: video/overlay and zone edit interaction.
@@ -189,7 +189,7 @@ Things an agent should verify rather than assume:
 
 1. `readme.md` says local Vite uses its proxy, but `api.js` currently defaults non-desktop builds to `http://192.168.1.4:8000`; local browser testing needs `VITE_API_BASE_URL` set to empty/same-origin or a compatible LAN API. Check actual intended setup before “fixing” either side.
 2. `hardware/README.md` includes a direct-Uvicorn `ESP32_DISCOVERY_ENABLED` setup, while the main README's browser-development command only sets `HARDWARE_ALERT_ENABLED`. mDNS discovery and hardware alert enablement are separate flags.
-3. `ConnectionGate` is unconditional in `App.jsx`; the dashboard first asks the operator to connect to the ESP32 setup AP, even though ESP32 is an optional hardware integration in other docs. Do not remove/change this flow without checking product intent.
+3. The Device setup panel checks for the ESP32 setup AP after the dashboard loads; ESP32 setup no longer blocks dashboard access.
 4. The top-level `dashboard_stats` table is initialized but the current `people_seen` value sums `telemetry_records`; changing one will not necessarily affect the UI.
 5. `alert_controller` and hardware state are module globals (single API process assumptions). Multiple Uvicorn workers would split alert state and are not a supported deployment shape without redesign.
 6. The service-worker registration is disabled in Electron, but browser/PWA deployment may cache frontend assets; remember stale client assets when debugging frontend deployment.
